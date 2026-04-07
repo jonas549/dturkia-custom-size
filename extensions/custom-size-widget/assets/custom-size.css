@@ -1,0 +1,179 @@
+/* ============================================================
+   Custom Size Widget — prefijo csw- en todas las clases
+   para evitar conflictos con el tema existente
+   ============================================================ */
+
+#custom-size-widget {
+  margin: 24px 0;
+  font-family: inherit;
+}
+
+.csw-container {
+  border: 1px solid #e1e3e5;
+  border-radius: 8px;
+  padding: 20px 24px;
+  background: #ffffff;
+  max-width: 480px;
+}
+
+/* Título */
+.csw-title {
+  margin: 0 0 20px;
+  font-size: 16px;
+  font-weight: 600;
+  color: #202223;
+  letter-spacing: -0.01em;
+}
+
+/* ── Sliders ─────────────────────────────────────────────── */
+.csw-slider-group {
+  margin-bottom: 20px;
+}
+
+.csw-slider-group label {
+  display: block;
+  font-size: 14px;
+  font-weight: 500;
+  margin-bottom: 8px;
+  color: #202223;
+}
+
+.csw-slider-group input[type="range"] {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 100%;
+  height: 4px;
+  background: #e1e3e5;
+  border-radius: 2px;
+  outline: none;
+  cursor: pointer;
+}
+
+.csw-slider-group input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: #008060;
+  cursor: pointer;
+  border: 2px solid #fff;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.2);
+  transition: background 0.15s;
+}
+
+.csw-slider-group input[type="range"]::-webkit-slider-thumb:hover {
+  background: #006e52;
+}
+
+.csw-slider-group input[type="range"]::-moz-range-thumb {
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: #008060;
+  cursor: pointer;
+  border: 2px solid #fff;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.2);
+}
+
+.csw-range-labels {
+  display: flex;
+  justify-content: space-between;
+  font-size: 11px;
+  color: #6d7175;
+  margin-top: 5px;
+}
+
+/* ── Impermeabilizador ───────────────────────────────────── */
+#csw-waterproof-section {
+  margin-bottom: 20px;
+  padding: 12px 16px;
+  background: #f1f8ff;
+  border: 1px solid #b3d4f5;
+  border-radius: 6px;
+}
+
+#csw-waterproof-section label {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 14px;
+  color: #202223;
+  cursor: pointer;
+}
+
+#csw-waterproof-section input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  cursor: pointer;
+  accent-color: #008060;
+  flex-shrink: 0;
+}
+
+/* ── Resumen de precios ──────────────────────────────────── */
+.csw-resumen {
+  background: #f6f6f7;
+  border-radius: 6px;
+  padding: 14px 16px;
+  margin-bottom: 18px;
+  font-size: 14px;
+  line-height: 2;
+  color: #202223;
+}
+
+.csw-resumen strong {
+  color: #008060;
+}
+
+.csw-total {
+  font-weight: 600;
+  font-size: 15px;
+  padding-top: 6px;
+  border-top: 1px solid #e1e3e5;
+  margin-top: 4px;
+}
+
+.csw-total strong {
+  font-size: 18px;
+}
+
+/* ── Botón agregar ───────────────────────────────────────── */
+.csw-btn {
+  display: block;
+  width: 100%;
+  padding: 13px 20px;
+  background: #008060;
+  color: #ffffff;
+  border: none;
+  border-radius: 6px;
+  font-size: 15px;
+  font-weight: 600;
+  text-align: center;
+  cursor: pointer;
+  transition: background 0.2s ease;
+  letter-spacing: 0.01em;
+}
+
+.csw-btn:hover:not(:disabled) {
+  background: #006e52;
+}
+
+.csw-btn:active:not(:disabled) {
+  background: #005c44;
+}
+
+.csw-btn:disabled {
+  background: #95a3a0;
+  cursor: not-allowed;
+}
+
+/* ── Responsive ──────────────────────────────────────────── */
+@media (max-width: 480px) {
+  .csw-container {
+    padding: 16px;
+  }
+
+  .csw-title {
+    font-size: 15px;
+  }
+}

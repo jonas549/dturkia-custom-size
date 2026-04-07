@@ -1,0 +1,54 @@
+{% comment %}
+  Custom Size Widget — Snippet para temas sin soporte de App Blocks (OS 1.0).
+  Uso: {% render 'custom-size-snippet' %}
+  Incluir manualmente en theme.liquid o product.liquid:
+    {{ 'custom-size.css' | asset_url | stylesheet_tag }}
+    <script src="{{ 'custom-size.js' | asset_url }}" defer></script>
+{% endcomment %}
+
+{% assign shop_domain = shop.permanent_domain %}
+{% assign product_id = product.id | prepend: 'gid://shopify/Product/' %}
+
+<div id="custom-size-widget"
+     data-shop="{{ shop_domain }}"
+     data-product-id="{{ product_id }}"
+     data-app-url="{{ app.url }}"
+     style="display:none">
+
+  <div class="csw-container">
+    <h3 class="csw-title">📐 Medida Personalizada</h3>
+
+    <div class="csw-slider-group">
+      <label>Ancho: <span id="csw-ancho-val">--</span> cm</label>
+      <input type="range" id="csw-ancho" min="0" max="100" step="1" value="50">
+      <div class="csw-range-labels">
+        <span id="csw-ancho-min"></span>
+        <span id="csw-ancho-max"></span>
+      </div>
+    </div>
+
+    <div class="csw-slider-group">
+      <label>Alto: <span id="csw-alto-val">--</span> cm</label>
+      <input type="range" id="csw-alto" min="0" max="100" step="1" value="50">
+      <div class="csw-range-labels">
+        <span id="csw-alto-min"></span>
+        <span id="csw-alto-max"></span>
+      </div>
+    </div>
+
+    <div id="csw-waterproof-section" style="display:none">
+      <label>
+        <input type="checkbox" id="csw-waterproof">
+        Añadir impermeabilizador (<span id="csw-waterproof-precio">0</span> CLP)
+      </label>
+    </div>
+
+    <div class="csw-resumen">
+      <div>Alfombra: <strong id="csw-precio-alfombra">0</strong> CLP</div>
+      <div id="csw-resumen-waterproof" style="display:none">Impermeabilizador: +<strong id="csw-precio-waterproof">0</strong> CLP</div>
+      <div class="csw-total">Total: <strong id="csw-precio-total">0</strong> CLP</div>
+    </div>
+
+    <button id="csw-agregar" class="csw-btn">Agregar a la bolsa</button>
+  </div>
+</div>
