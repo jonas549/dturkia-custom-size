@@ -5,6 +5,7 @@ import type {
   HeadersFunction,
 } from "react-router";
 import { Form, redirect, useActionData, useNavigation } from "react-router";
+import { useAppBridge } from "@shopify/app-bridge-react";
 import { authenticate } from "../shopify.server";
 import { boundary } from "@shopify/shopify-app-react-router/server";
 import prisma from "../db.server";
@@ -21,6 +22,13 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   const nombre = String(fd.get("nombre") ?? "").trim();
   if (!nombre) return { error: "El nombre es requerido." };
 
+  let productIds: string[] = [];
+  try {
+    productIds = JSON.parse(String(fd.get("productIds") ?? "[]"));
+  } catch {
+    productIds = [];
+  }
+
   await prisma.reglaPersonalizada.create({
     data: {
       shop: session.shop,
@@ -33,22 +41,23 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       waterproofActivo: fd.get("waterproofActivo") === "on",
       waterproofPorCm2: Number(fd.get("waterproofPorCm2") ?? 0),
       activa: fd.get("activa") === "on",
+      productIds,
     },
   });
 
   return redirect("/app/reglas");
 };
 
-// ── Shared form styles ──────────────────────────────────────────────────────
+// ── Estilos compartidos ──────────────────────────────────────────────────────
 const field: React.CSSProperties = { marginBottom: 16 };
-const label: React.CSSProperties = {
+const labelStyle: React.CSSProperties = {
   display: "block",
   fontSize: 13,
   fontWeight: 600,
   marginBottom: 4,
   color: "#202223",
 };
-const input: React.CSSProperties = {
+const inputStyle: React.CSSProperties = {
   width: "100%",
   padding: "8px 12px",
   border: "1px solid #8c9196",
@@ -76,7 +85,6 @@ const submitBtn: React.CSSProperties = {
   fontSize: 14,
   fontWeight: 600,
   cursor: "pointer",
-  marginRight: 12,
 };
 const cancelBtn: React.CSSProperties = {
   background: "transparent",
@@ -88,15 +96,71 @@ const cancelBtn: React.CSSProperties = {
   fontWeight: 600,
   cursor: "pointer",
 };
+const pickerBtn: React.CSSProperties = {
+  background: "#f1f8ff",
+  color: "#0070c4",
+  border: "1px solid #0070c4",
+  borderRadius: 6,
+  padding: "8px 16px",
+  fontSize: 14,
+  fontWeight: 600,
+  cursor: "pointer",
+};
+const tagStyle: React.CSSProperties = {
+  display: "inline-flex",
+  alignItems: "center",
+  gap: 6,
+  background: "#e4e5e7",
+  borderRadius: 20,
+  padding: "4px 10px",
+  fontSize: 13,
+  color: "#202223",
+  marginRight: 8,
+  marginBottom: 8,
+};
+const tagRemove: React.CSSProperties = {
+  background: "none",
+  border: "none",
+  cursor: "pointer",
+  color: "#6d7175",
+  fontSize: 15,
+  lineHeight: 1,
+  padding: 0,
+};
 // ────────────────────────────────────────────────────────────────────────────
+
+type Producto = { id: string; title: string };
 
 export default function NuevaRegla() {
   const actionData = useActionData<typeof action>();
   const navigation = useNavigation();
   const saving = navigation.state === "submitting";
+  const shopify = useAppBridge();
 
   const [waterproofActivo, setWaterproofActivo] = useState(true);
   const [activa, setActiva] = useState(true);
+  const [productos, setProductos] = useState<Producto[]>([]);
+
+  const abrirPicker = async () => {
+    const seleccion = await (shopify as any).resourcePicker({
+      type: "product",
+      multiple: true,
+      action: "select",
+    });
+    if (seleccion && seleccion.length > 0) {
+      setProductos((prev) => {
+        const existingIds = new Set(prev.map((p) => p.id));
+        const nuevos = seleccion
+          .filter((p: any) => !existingIds.has(p.id))
+          .map((p: any) => ({ id: p.id as string, title: p.title as string }));
+        return [...prev, ...nuevos];
+      });
+    }
+  };
+
+  const quitarProducto = (id: string) => {
+    setProductos((prev) => prev.filter((p) => p.id !== id));
+  };
 
   return (
     <s-page heading="Nueva regla de medidas">
@@ -120,7 +184,7 @@ export default function NuevaRegla() {
         <Form method="post">
           {/* Nombre */}
           <div style={field}>
-            <label style={label} htmlFor="nombre">
+            <label style={labelStyle} htmlFor="nombre">
               Nombre interno
             </label>
             <input
@@ -128,7 +192,7 @@ export default function NuevaRegla() {
               name="nombre"
               type="text"
               placeholder="Ej: Alfombra estándar"
-              style={input}
+              style={inputStyle}
               required
             />
           </div>
@@ -136,7 +200,7 @@ export default function NuevaRegla() {
           {/* Ancho */}
           <div style={grid2}>
             <div style={field}>
-              <label style={label} htmlFor="minAncho">
+              <label style={labelStyle} htmlFor="minAncho">
                 Ancho mínimo (cm)
               </label>
               <input
@@ -145,12 +209,12 @@ export default function NuevaRegla() {
                 type="number"
                 min={1}
                 defaultValue={50}
-                style={input}
+                style={inputStyle}
                 required
               />
             </div>
             <div style={field}>
-              <label style={label} htmlFor="maxAncho">
+              <label style={labelStyle} htmlFor="maxAncho">
                 Ancho máximo (cm)
               </label>
               <input
@@ -159,7 +223,7 @@ export default function NuevaRegla() {
                 type="number"
                 min={1}
                 defaultValue={500}
-                style={input}
+                style={inputStyle}
                 required
               />
             </div>
@@ -168,7 +232,7 @@ export default function NuevaRegla() {
           {/* Alto */}
           <div style={grid2}>
             <div style={field}>
-              <label style={label} htmlFor="minAlto">
+              <label style={labelStyle} htmlFor="minAlto">
                 Alto mínimo (cm)
               </label>
               <input
@@ -177,12 +241,12 @@ export default function NuevaRegla() {
                 type="number"
                 min={1}
                 defaultValue={50}
-                style={input}
+                style={inputStyle}
                 required
               />
             </div>
             <div style={field}>
-              <label style={label} htmlFor="maxAlto">
+              <label style={labelStyle} htmlFor="maxAlto">
                 Alto máximo (cm)
               </label>
               <input
@@ -191,7 +255,7 @@ export default function NuevaRegla() {
                 type="number"
                 min={1}
                 defaultValue={500}
-                style={input}
+                style={inputStyle}
                 required
               />
             </div>
@@ -199,8 +263,8 @@ export default function NuevaRegla() {
 
           {/* Precio por cm² */}
           <div style={field}>
-            <label style={label} htmlFor="precioPorCm2">
-              Precio por cm² ($)
+            <label style={labelStyle} htmlFor="precioPorCm2">
+              Precio por cm² (CLP)
             </label>
             <input
               id="precioPorCm2"
@@ -209,7 +273,7 @@ export default function NuevaRegla() {
               min={0}
               step="0.0001"
               defaultValue={0.0025}
-              style={input}
+              style={inputStyle}
               required
             />
           </div>
@@ -224,7 +288,10 @@ export default function NuevaRegla() {
               onChange={(e) => setWaterproofActivo(e.target.checked)}
               style={{ width: 16, height: 16, cursor: "pointer" }}
             />
-            <label htmlFor="waterproofActivo" style={{ fontSize: 14, cursor: "pointer" }}>
+            <label
+              htmlFor="waterproofActivo"
+              style={{ fontSize: 14, cursor: "pointer" }}
+            >
               Activar impermeabilizador
             </label>
           </div>
@@ -232,8 +299,8 @@ export default function NuevaRegla() {
           {/* Precio impermeabilizador (condicional) */}
           {waterproofActivo && (
             <div style={field}>
-              <label style={label} htmlFor="waterproofPorCm2">
-                Precio impermeabilizador por cm² ($)
+              <label style={labelStyle} htmlFor="waterproofPorCm2">
+                Precio impermeabilizador por cm² (CLP)
               </label>
               <input
                 id="waterproofPorCm2"
@@ -242,12 +309,10 @@ export default function NuevaRegla() {
                 min={0}
                 step="0.0001"
                 defaultValue={0.001}
-                style={input}
+                style={inputStyle}
               />
             </div>
           )}
-
-          {/* Precio impermeabilizador hidden (cuando toggle off) */}
           {!waterproofActivo && (
             <input type="hidden" name="waterproofPorCm2" value="0" />
           )}
@@ -262,9 +327,50 @@ export default function NuevaRegla() {
               onChange={(e) => setActiva(e.target.checked)}
               style={{ width: 16, height: 16, cursor: "pointer" }}
             />
-            <label htmlFor="activa" style={{ fontSize: 14, cursor: "pointer" }}>
+            <label
+              htmlFor="activa"
+              style={{ fontSize: 14, cursor: "pointer" }}
+            >
               Regla activa
             </label>
+          </div>
+
+          {/* Selector de productos */}
+          <div style={{ ...field, marginTop: 8 }}>
+            <span style={labelStyle}>Productos donde aplica esta regla</span>
+            <div style={{ marginBottom: 10 }}>
+              <button type="button" style={pickerBtn} onClick={abrirPicker}>
+                + Seleccionar productos
+              </button>
+            </div>
+            {productos.length > 0 && (
+              <div style={{ display: "flex", flexWrap: "wrap", marginTop: 8 }}>
+                {productos.map((p) => (
+                  <span key={p.id} style={tagStyle}>
+                    {p.title}
+                    <button
+                      type="button"
+                      style={tagRemove}
+                      onClick={() => quitarProducto(p.id)}
+                      aria-label={`Quitar ${p.title}`}
+                    >
+                      ×
+                    </button>
+                  </span>
+                ))}
+              </div>
+            )}
+            {productos.length === 0 && (
+              <p style={{ fontSize: 13, color: "#6d7175", margin: "8px 0 0" }}>
+                Sin productos seleccionados — la regla aplicará a todos.
+              </p>
+            )}
+            {/* Hidden input con los IDs serializados */}
+            <input
+              type="hidden"
+              name="productIds"
+              value={JSON.stringify(productos.map((p) => p.id))}
+            />
           </div>
 
           {/* Botones */}

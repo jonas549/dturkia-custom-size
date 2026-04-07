@@ -11,17 +11,40 @@ import {
   useLoaderData,
   useNavigation,
 } from "react-router";
+import { useAppBridge } from "@shopify/app-bridge-react";
 import { authenticate } from "../shopify.server";
 import { boundary } from "@shopify/shopify-app-react-router/server";
 import prisma from "../db.server";
 
 export const loader = async ({ request, params }: LoaderFunctionArgs) => {
-  const { session } = await authenticate.admin(request);
+  const { session, admin } = await authenticate.admin(request);
   const regla = await prisma.reglaPersonalizada.findFirst({
     where: { id: params.id, shop: session.shop },
   });
   if (!regla) throw new Response("Regla no encontrada", { status: 404 });
-  return { regla };
+
+  // Obtener títulos de los productos guardados
+  let productosExistentes: { id: string; title: string }[] = [];
+  if (regla.productIds.length > 0) {
+    const resp = await admin.graphql(
+      `#graphql
+      query getProductTitles($ids: [ID!]!) {
+        nodes(ids: $ids) {
+          ... on Product {
+            id
+            title
+          }
+        }
+      }`,
+      { variables: { ids: regla.productIds } },
+    );
+    const json = await resp.json();
+    productosExistentes = (json.data?.nodes ?? [])
+      .filter((n: any) => n?.id)
+      .map((n: any) => ({ id: n.id as string, title: n.title as string }));
+  }
+
+  return { regla, productosExistentes };
 };
 
 export const action = async ({ request, params }: ActionFunctionArgs) => {
@@ -38,6 +61,13 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
   const nombre = String(fd.get("nombre") ?? "").trim();
   if (!nombre) return { error: "El nombre es requerido." };
 
+  let productIds: string[] = [];
+  try {
+    productIds = JSON.parse(String(fd.get("productIds") ?? "[]"));
+  } catch {
+    productIds = [];
+  }
+
   await prisma.reglaPersonalizada.updateMany({
     where: { id: params.id, shop: session.shop },
     data: {
@@ -50,22 +80,23 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
       waterproofActivo: fd.get("waterproofActivo") === "on",
       waterproofPorCm2: Number(fd.get("waterproofPorCm2") ?? 0),
       activa: fd.get("activa") === "on",
+      productIds,
     },
   });
 
   return redirect("/app/reglas");
 };
 
-// ── Shared form styles ──────────────────────────────────────────────────────
+// ── Estilos compartidos ──────────────────────────────────────────────────────
 const field: React.CSSProperties = { marginBottom: 16 };
-const label: React.CSSProperties = {
+const labelStyle: React.CSSProperties = {
   display: "block",
   fontSize: 13,
   fontWeight: 600,
   marginBottom: 4,
   color: "#202223",
 };
-const input: React.CSSProperties = {
+const inputStyle: React.CSSProperties = {
   width: "100%",
   padding: "8px 12px",
   border: "1px solid #8c9196",
@@ -114,18 +145,74 @@ const deleteBtn: React.CSSProperties = {
   fontWeight: 600,
   cursor: "pointer",
 };
+const pickerBtn: React.CSSProperties = {
+  background: "#f1f8ff",
+  color: "#0070c4",
+  border: "1px solid #0070c4",
+  borderRadius: 6,
+  padding: "8px 16px",
+  fontSize: 14,
+  fontWeight: 600,
+  cursor: "pointer",
+};
+const tagStyle: React.CSSProperties = {
+  display: "inline-flex",
+  alignItems: "center",
+  gap: 6,
+  background: "#e4e5e7",
+  borderRadius: 20,
+  padding: "4px 10px",
+  fontSize: 13,
+  color: "#202223",
+  marginRight: 8,
+  marginBottom: 8,
+};
+const tagRemove: React.CSSProperties = {
+  background: "none",
+  border: "none",
+  cursor: "pointer",
+  color: "#6d7175",
+  fontSize: 15,
+  lineHeight: 1,
+  padding: 0,
+};
 // ────────────────────────────────────────────────────────────────────────────
 
+type Producto = { id: string; title: string };
+
 export default function EditarRegla() {
-  const { regla } = useLoaderData<typeof loader>();
+  const { regla, productosExistentes } = useLoaderData<typeof loader>();
   const actionData = useActionData<typeof action>();
   const navigation = useNavigation();
   const saving = navigation.state === "submitting";
+  const shopify = useAppBridge();
 
   const [waterproofActivo, setWaterproofActivo] = useState(
     regla.waterproofActivo,
   );
   const [activa, setActiva] = useState(regla.activa);
+  const [productos, setProductos] = useState<Producto[]>(productosExistentes);
+
+  const abrirPicker = async () => {
+    const seleccion = await (shopify as any).resourcePicker({
+      type: "product",
+      multiple: true,
+      action: "select",
+    });
+    if (seleccion && seleccion.length > 0) {
+      setProductos((prev) => {
+        const existingIds = new Set(prev.map((p) => p.id));
+        const nuevos = seleccion
+          .filter((p: any) => !existingIds.has(p.id))
+          .map((p: any) => ({ id: p.id as string, title: p.title as string }));
+        return [...prev, ...nuevos];
+      });
+    }
+  };
+
+  const quitarProducto = (id: string) => {
+    setProductos((prev) => prev.filter((p) => p.id !== id));
+  };
 
   return (
     <s-page heading={`Editar regla: ${regla.nombre}`}>
@@ -149,7 +236,7 @@ export default function EditarRegla() {
         <Form method="post">
           {/* Nombre */}
           <div style={field}>
-            <label style={label} htmlFor="nombre">
+            <label style={labelStyle} htmlFor="nombre">
               Nombre interno
             </label>
             <input
@@ -157,7 +244,7 @@ export default function EditarRegla() {
               name="nombre"
               type="text"
               defaultValue={regla.nombre}
-              style={input}
+              style={inputStyle}
               required
             />
           </div>
@@ -165,7 +252,7 @@ export default function EditarRegla() {
           {/* Ancho */}
           <div style={grid2}>
             <div style={field}>
-              <label style={label} htmlFor="minAncho">
+              <label style={labelStyle} htmlFor="minAncho">
                 Ancho mínimo (cm)
               </label>
               <input
@@ -174,12 +261,12 @@ export default function EditarRegla() {
                 type="number"
                 min={1}
                 defaultValue={regla.minAncho}
-                style={input}
+                style={inputStyle}
                 required
               />
             </div>
             <div style={field}>
-              <label style={label} htmlFor="maxAncho">
+              <label style={labelStyle} htmlFor="maxAncho">
                 Ancho máximo (cm)
               </label>
               <input
@@ -188,7 +275,7 @@ export default function EditarRegla() {
                 type="number"
                 min={1}
                 defaultValue={regla.maxAncho}
-                style={input}
+                style={inputStyle}
                 required
               />
             </div>
@@ -197,7 +284,7 @@ export default function EditarRegla() {
           {/* Alto */}
           <div style={grid2}>
             <div style={field}>
-              <label style={label} htmlFor="minAlto">
+              <label style={labelStyle} htmlFor="minAlto">
                 Alto mínimo (cm)
               </label>
               <input
@@ -206,12 +293,12 @@ export default function EditarRegla() {
                 type="number"
                 min={1}
                 defaultValue={regla.minAlto}
-                style={input}
+                style={inputStyle}
                 required
               />
             </div>
             <div style={field}>
-              <label style={label} htmlFor="maxAlto">
+              <label style={labelStyle} htmlFor="maxAlto">
                 Alto máximo (cm)
               </label>
               <input
@@ -220,7 +307,7 @@ export default function EditarRegla() {
                 type="number"
                 min={1}
                 defaultValue={regla.maxAlto}
-                style={input}
+                style={inputStyle}
                 required
               />
             </div>
@@ -228,8 +315,8 @@ export default function EditarRegla() {
 
           {/* Precio por cm² */}
           <div style={field}>
-            <label style={label} htmlFor="precioPorCm2">
-              Precio por cm² ($)
+            <label style={labelStyle} htmlFor="precioPorCm2">
+              Precio por cm² (CLP)
             </label>
             <input
               id="precioPorCm2"
@@ -238,7 +325,7 @@ export default function EditarRegla() {
               min={0}
               step="0.0001"
               defaultValue={regla.precioPorCm2}
-              style={input}
+              style={inputStyle}
               required
             />
           </div>
@@ -264,8 +351,8 @@ export default function EditarRegla() {
           {/* Precio impermeabilizador (condicional) */}
           {waterproofActivo && (
             <div style={field}>
-              <label style={label} htmlFor="waterproofPorCm2">
-                Precio impermeabilizador por cm² ($)
+              <label style={labelStyle} htmlFor="waterproofPorCm2">
+                Precio impermeabilizador por cm² (CLP)
               </label>
               <input
                 id="waterproofPorCm2"
@@ -274,11 +361,10 @@ export default function EditarRegla() {
                 min={0}
                 step="0.0001"
                 defaultValue={regla.waterproofPorCm2}
-                style={input}
+                style={inputStyle}
               />
             </div>
           )}
-
           {!waterproofActivo && (
             <input type="hidden" name="waterproofPorCm2" value="0" />
           )}
@@ -299,6 +385,43 @@ export default function EditarRegla() {
             >
               Regla activa
             </label>
+          </div>
+
+          {/* Selector de productos */}
+          <div style={{ ...field, marginTop: 8 }}>
+            <span style={labelStyle}>Productos donde aplica esta regla</span>
+            <div style={{ marginBottom: 10 }}>
+              <button type="button" style={pickerBtn} onClick={abrirPicker}>
+                + Seleccionar productos
+              </button>
+            </div>
+            {productos.length > 0 && (
+              <div style={{ display: "flex", flexWrap: "wrap", marginTop: 8 }}>
+                {productos.map((p) => (
+                  <span key={p.id} style={tagStyle}>
+                    {p.title}
+                    <button
+                      type="button"
+                      style={tagRemove}
+                      onClick={() => quitarProducto(p.id)}
+                      aria-label={`Quitar ${p.title}`}
+                    >
+                      ×
+                    </button>
+                  </span>
+                ))}
+              </div>
+            )}
+            {productos.length === 0 && (
+              <p style={{ fontSize: 13, color: "#6d7175", margin: "8px 0 0" }}>
+                Sin productos seleccionados — la regla aplicará a todos.
+              </p>
+            )}
+            <input
+              type="hidden"
+              name="productIds"
+              value={JSON.stringify(productos.map((p) => p.id))}
+            />
           </div>
 
           {/* Botones */}
@@ -322,7 +445,14 @@ export default function EditarRegla() {
         </Form>
 
         {/* Formulario de eliminación separado */}
-        <Form method="post" style={{ marginTop: 40, paddingTop: 24, borderTop: "1px solid #e1e3e5" }}>
+        <Form
+          method="post"
+          style={{
+            marginTop: 40,
+            paddingTop: 24,
+            borderTop: "1px solid #e1e3e5",
+          }}
+        >
           <input type="hidden" name="_action" value="delete" />
           <s-paragraph>
             <strong>Zona de peligro:</strong> esta acción no se puede deshacer.

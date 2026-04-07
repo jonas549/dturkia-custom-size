@@ -43,6 +43,7 @@ model ReglaPersonalizada {
   waterproofActivo Boolean  @default(true)
   waterproofPorCm2 Float    @default(0)
   activa           Boolean  @default(true)
+  productIds       String[] @default([])
   createdAt        DateTime @default(now())
 }
 
