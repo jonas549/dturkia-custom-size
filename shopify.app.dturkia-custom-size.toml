@@ -2,12 +2,11 @@
 
 client_id = "e0eeca453b4261fc5548e701e2b58a62"
 name = "dturkia-custom-size"
-application_url = "https://example.com"
+application_url = "https://dturkia-custom-size.vercel.app"
 embedded = true
 
 [build]
 automatically_update_urls_on_dev = true
-include_config_on_deploy = true
 
 [webhooks]
 api_version = "2026-07"
@@ -17,4 +16,4 @@ api_version = "2026-07"
 scopes = "write_products,read_products,read_orders,write_orders"
 
 [auth]
-redirect_urls = [ "https://example.com/api/auth" ]
+redirect_urls = [ "https://dturkia-custom-size.vercel.app/auth/callback" ]
