@@ -8,9 +8,15 @@ const corsHeaders = {
   "Content-Type": "application/json",
 };
 
+const preflightHeaders = {
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Methods": "GET, OPTIONS",
+  "Access-Control-Allow-Headers": "Content-Type",
+};
+
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   if (request.method === "OPTIONS") {
-    return new Response(null, { status: 204, headers: corsHeaders });
+    return new Response(null, { status: 204, headers: preflightHeaders });
   }
 
   const url = new URL(request.url);
