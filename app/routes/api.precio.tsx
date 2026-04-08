@@ -82,6 +82,3 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   );
 };
 
-export default function ApiPrecio() {
-  return null;
-}
