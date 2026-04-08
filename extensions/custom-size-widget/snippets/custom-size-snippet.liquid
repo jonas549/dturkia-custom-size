@@ -1,22 +1,19 @@
 {% comment %}
-  Custom Size Widget — Snippet para temas sin soporte de App Blocks (OS 1.0).
-  Uso: {% render 'custom-size-snippet' %}
-  Incluir manualmente en theme.liquid o product.liquid:
-    {{ 'custom-size.css' | asset_url | stylesheet_tag }}
-    <script src="{{ 'custom-size.js' | asset_url }}" defer></script>
+  Custom Size Widget — autocontenido para temas OS 1.0
+  Pegar en snippets/product-add.liquid (o donde corresponda).
+  No requiere App Blocks ni archivos externos.
 {% endcomment %}
 
-{% assign shop_domain = shop.permanent_domain %}
-{% assign product_id = product.id | prepend: 'gid://shopify/Product/' %}
+{% assign csw_shop    = shop.permanent_domain %}
+{% assign csw_product = product.id | prepend: 'gid://shopify/Product/' %}
 
-<div id="custom-size-widget"
-     data-shop="{{ shop_domain }}"
-     data-product-id="{{ product_id }}"
-     data-app-url="{{ app.url }}"
+<div id="csw-root"
+     data-shop="{{ csw_shop }}"
+     data-product-id="{{ csw_product }}"
      style="display:none">
 
   <div class="csw-container">
-    <h3 class="csw-title">📐 Medida Personalizada</h3>
+    <h3 class="csw-title">&#128208; Medida Personalizada</h3>
 
     <div class="csw-slider-group">
       <label>Ancho: <span id="csw-ancho-val">--</span> cm</label>
@@ -39,7 +36,7 @@
     <div id="csw-waterproof-section" style="display:none">
       <label>
         <input type="checkbox" id="csw-waterproof">
-        Añadir impermeabilizador (<span id="csw-waterproof-precio">0</span> CLP)
+        A&#241;adir impermeabilizador (+<span id="csw-waterproof-precio">0</span> CLP)
       </label>
     </div>
 
@@ -49,6 +46,309 @@
       <div class="csw-total">Total: <strong id="csw-precio-total">0</strong> CLP</div>
     </div>
 
-    <button id="csw-agregar" class="csw-btn">Agregar a la bolsa</button>
+    <button id="csw-agregar" class="csw-btn" type="button">Agregar a la bolsa</button>
   </div>
 </div>
+
+<style>
+  #csw-root { margin: 24px 0; font-family: inherit; }
+
+  .csw-container {
+    border: 1px solid #e1e3e5;
+    border-radius: 8px;
+    padding: 20px 24px;
+    background: #ffffff;
+    max-width: 480px;
+  }
+
+  .csw-title {
+    margin: 0 0 20px;
+    font-size: 16px;
+    font-weight: 600;
+    color: #202223;
+    letter-spacing: -0.01em;
+  }
+
+  .csw-slider-group { margin-bottom: 20px; }
+
+  .csw-slider-group label {
+    display: block;
+    font-size: 14px;
+    font-weight: 500;
+    margin-bottom: 8px;
+    color: #202223;
+  }
+
+  .csw-slider-group input[type="range"] {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 100%;
+    height: 4px;
+    background: #e1e3e5;
+    border-radius: 2px;
+    outline: none;
+    cursor: pointer;
+  }
+
+  .csw-slider-group input[type="range"]::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 20px;
+    height: 20px;
+    border-radius: 50%;
+    background: #008060;
+    cursor: pointer;
+    border: 2px solid #fff;
+    box-shadow: 0 1px 4px rgba(0,0,0,.2);
+    transition: background .15s;
+  }
+
+  .csw-slider-group input[type="range"]::-webkit-slider-thumb:hover { background: #006e52; }
+
+  .csw-slider-group input[type="range"]::-moz-range-thumb {
+    width: 20px;
+    height: 20px;
+    border-radius: 50%;
+    background: #008060;
+    cursor: pointer;
+    border: 2px solid #fff;
+    box-shadow: 0 1px 4px rgba(0,0,0,.2);
+  }
+
+  .csw-range-labels {
+    display: flex;
+    justify-content: space-between;
+    font-size: 11px;
+    color: #6d7175;
+    margin-top: 5px;
+  }
+
+  #csw-waterproof-section {
+    margin-bottom: 20px;
+    padding: 12px 16px;
+    background: #f1f8ff;
+    border: 1px solid #b3d4f5;
+    border-radius: 6px;
+  }
+
+  #csw-waterproof-section label {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-size: 14px;
+    color: #202223;
+    cursor: pointer;
+  }
+
+  #csw-waterproof-section input[type="checkbox"] {
+    width: 16px;
+    height: 16px;
+    cursor: pointer;
+    accent-color: #008060;
+    flex-shrink: 0;
+  }
+
+  .csw-resumen {
+    background: #f6f6f7;
+    border-radius: 6px;
+    padding: 14px 16px;
+    margin-bottom: 18px;
+    font-size: 14px;
+    line-height: 2;
+    color: #202223;
+  }
+
+  .csw-resumen strong { color: #008060; }
+
+  .csw-total {
+    font-weight: 600;
+    font-size: 15px;
+    padding-top: 6px;
+    border-top: 1px solid #e1e3e5;
+    margin-top: 4px;
+  }
+
+  .csw-total strong { font-size: 18px; }
+
+  .csw-btn {
+    display: block;
+    width: 100%;
+    padding: 13px 20px;
+    background: #008060;
+    color: #ffffff;
+    border: none;
+    border-radius: 6px;
+    font-size: 15px;
+    font-weight: 600;
+    text-align: center;
+    cursor: pointer;
+    transition: background .2s ease;
+    letter-spacing: .01em;
+  }
+
+  .csw-btn:hover:not(:disabled) { background: #006e52; }
+  .csw-btn:active:not(:disabled) { background: #005c44; }
+  .csw-btn:disabled { background: #95a3a0; cursor: not-allowed; }
+
+  @media (max-width: 480px) {
+    .csw-container { padding: 16px; }
+    .csw-title { font-size: 15px; }
+  }
+</style>
+
+<script>
+(function () {
+  'use strict';
+
+  var APP_URL = 'https://dturkia-custom-size.vercel.app';
+
+  var fmt = new Intl.NumberFormat('es-CL', { style: 'decimal', maximumFractionDigits: 0 });
+
+  function eid(id) { return document.getElementById(id); }
+
+  function calcular(precioCm2, waterproofCm2, waterproofActivo) {
+    var ancho = parseInt(eid('csw-ancho').value, 10);
+    var alto  = parseInt(eid('csw-alto').value,  10);
+    var area  = ancho * alto;
+
+    var precioAlfombra   = Math.round(area * precioCm2);
+    var precioWaterproof = Math.round(area * waterproofCm2);
+    var wpChecked = waterproofActivo && eid('csw-waterproof') && eid('csw-waterproof').checked;
+
+    eid('csw-precio-alfombra').textContent = fmt.format(precioAlfombra);
+
+    if (waterproofActivo) {
+      eid('csw-waterproof-precio').textContent  = fmt.format(precioWaterproof);
+      eid('csw-precio-waterproof').textContent  = fmt.format(precioWaterproof);
+      eid('csw-resumen-waterproof').style.display = wpChecked ? '' : 'none';
+    }
+
+    var total = precioAlfombra + (wpChecked ? precioWaterproof : 0);
+    eid('csw-precio-total').textContent = fmt.format(total);
+  }
+
+  function getVariantId() {
+    var input =
+      document.querySelector('form[action*="/cart/add"] input[name="id"]') ||
+      document.querySelector('input[name="id"]') ||
+      document.querySelector('[name="id"]');
+    return input ? input.value : null;
+  }
+
+  function agregarAlCarrito(ancho, alto, waterproofActivo) {
+    var variantId = getVariantId();
+    if (!variantId) {
+      alert('No se pudo obtener la variante del producto. Por favor recarga la página.');
+      return;
+    }
+
+    var wpChecked = waterproofActivo && eid('csw-waterproof') && eid('csw-waterproof').checked;
+    var btn = eid('csw-agregar');
+    btn.disabled    = true;
+    btn.textContent = 'Agregando\u2026';
+
+    fetch('/cart/add.js', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        id: parseInt(variantId, 10),
+        quantity: 1,
+        properties: {
+          '_Ancho personalizado': ancho + ' cm',
+          '_Alto personalizado':  alto  + ' cm',
+          '_Impermeabilizador':   wpChecked ? 'S\u00ed' : 'No'
+        }
+      })
+    })
+    .then(function (r) { return r.json(); })
+    .then(function (data) {
+      if (data.status && data.status >= 400) {
+        alert('Error al agregar: ' + (data.description || data.message || 'Error desconocido'));
+      } else {
+        window.location.href = '/cart';
+      }
+    })
+    .catch(function () {
+      alert('Error de red. Por favor intenta nuevamente.');
+    })
+    .finally(function () {
+      btn.disabled    = false;
+      btn.textContent = 'Agregar a la bolsa';
+    });
+  }
+
+  function init() {
+    var root = document.getElementById('csw-root');
+    if (!root) return;
+
+    var shop      = root.dataset.shop;
+    var productId = root.dataset.productId;
+    if (!shop) return;
+
+    var apiUrl = APP_URL + '/api/precio'
+      + '?shop='      + encodeURIComponent(shop)
+      + '&ancho=100'
+      + '&alto=100'
+      + (productId ? '&productId=' + encodeURIComponent(productId) : '');
+
+    fetch(apiUrl)
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (data) {
+        if (!data || data.error) return; // sin regla activa → widget permanece oculto
+
+        var regla          = data.regla;
+        var precioCm2      = data.precioPorCm2     || 0;
+        var waterproofCm2  = data.waterproofPorCm2 || 0;
+        var waterproofActivo = !!data.waterproofActivo;
+
+        // Configurar sliders
+        var sAncho = eid('csw-ancho');
+        var sAlto  = eid('csw-alto');
+        var midAncho = Math.round((regla.minAncho + regla.maxAncho) / 2);
+        var midAlto  = Math.round((regla.minAlto  + regla.maxAlto)  / 2);
+
+        sAncho.min = regla.minAncho; sAncho.max = regla.maxAncho; sAncho.value = midAncho;
+        sAlto.min  = regla.minAlto;  sAlto.max  = regla.maxAlto;  sAlto.value  = midAlto;
+
+        eid('csw-ancho-val').textContent = midAncho;
+        eid('csw-alto-val').textContent  = midAlto;
+        eid('csw-ancho-min').textContent = regla.minAncho + ' cm';
+        eid('csw-ancho-max').textContent = regla.maxAncho + ' cm';
+        eid('csw-alto-min').textContent  = regla.minAlto  + ' cm';
+        eid('csw-alto-max').textContent  = regla.maxAlto  + ' cm';
+
+        if (waterproofActivo) {
+          eid('csw-waterproof-section').style.display = '';
+        }
+
+        calcular(precioCm2, waterproofCm2, waterproofActivo);
+        root.style.display = ''; // mostrar widget
+
+        // Eventos
+        sAncho.addEventListener('input', function () {
+          eid('csw-ancho-val').textContent = sAncho.value;
+          calcular(precioCm2, waterproofCm2, waterproofActivo);
+        });
+        sAlto.addEventListener('input', function () {
+          eid('csw-alto-val').textContent = sAlto.value;
+          calcular(precioCm2, waterproofCm2, waterproofActivo);
+        });
+        if (waterproofActivo && eid('csw-waterproof')) {
+          eid('csw-waterproof').addEventListener('change', function () {
+            calcular(precioCm2, waterproofCm2, waterproofActivo);
+          });
+        }
+        eid('csw-agregar').addEventListener('click', function () {
+          agregarAlCarrito(sAncho.value, sAlto.value, waterproofActivo);
+        });
+      })
+      .catch(function () { /* error silencioso — widget oculto */ });
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', init);
+  } else {
+    init();
+  }
+})();
+</script>
