@@ -1,5 +1,5 @@
 import type { LoaderFunctionArgs } from "react-router";
-import prisma from "../db.server";
+import { neon } from "@neondatabase/serverless";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -20,42 +20,37 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   }
 
   const url = new URL(request.url);
-  const shop = url.searchParams.get("shop") ?? "";
-  const ancho = Number(url.searchParams.get("ancho") ?? 0);
-  const alto = Number(url.searchParams.get("alto") ?? 0);
-  const productId = url.searchParams.get("productId") ?? "";
+  const shop = url.searchParams.get("shop");
+  const productId = url.searchParams.get("productId");
+  const ancho = Number(url.searchParams.get("ancho") || 100);
+  const alto = Number(url.searchParams.get("alto") || 100);
 
   console.log("[api.precio] Request recibido:", { shop, productId, ancho, alto });
 
   if (!shop || ancho <= 0 || alto <= 0) {
     return new Response(
-      JSON.stringify({
-        error: "Parámetros inválidos. Se requiere shop, ancho y alto.",
-      }),
+      JSON.stringify({ error: "Parámetros inválidos. Se requiere shop, ancho y alto." }),
       { status: 400, headers: corsHeaders },
     );
   }
 
-  // Si se envía productId, buscar regla que aplique a ese producto
-  // (productIds vacío = aplica a todos; productIds con entradas = solo esos productos)
   console.log("[api.precio] Buscando regla para shop:", shop, "productId:", productId);
 
-  const regla = productId
-    ? await prisma.reglaPersonalizada.findFirst({
-        where: {
-          shop,
-          activa: true,
-          OR: [
-            { productIds: { isEmpty: true } },
-            { productIds: { has: productId } },
-          ],
-        },
-      })
-    : await prisma.reglaPersonalizada.findFirst({
-        where: { shop, activa: true },
-      });
+  const sql = neon(process.env.DIRECT_URL!);
 
-  if (!regla) {
+  const rows = await sql`
+    SELECT * FROM "ReglaPersonalizada"
+    WHERE shop = ${shop}
+    AND activa = true
+    AND (
+      ${productId} = ANY("productIds")
+      OR array_length("productIds", 1) IS NULL
+      OR "productIds" = '{}'
+    )
+    LIMIT 1
+  `;
+
+  if (!rows.length) {
     console.log("[api.precio] No se encontró regla activa");
     return new Response(
       JSON.stringify({ error: "No hay regla activa para esta tienda." }),
@@ -63,6 +58,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     );
   }
 
+  const regla = rows[0];
   console.log("[api.precio] Regla encontrada:", regla);
 
   const precio = Math.round(ancho * alto * regla.precioPorCm2);
@@ -73,7 +69,6 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       precio,
       waterproofPrecio,
       waterproofActivo: regla.waterproofActivo,
-      // Tarifas por cm² para cálculo local en tiempo real (sin llamadas extra)
       precioPorCm2: regla.precioPorCm2,
       waterproofPorCm2: regla.waterproofPorCm2,
       regla: {
