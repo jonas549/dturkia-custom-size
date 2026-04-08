@@ -19,6 +19,8 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   const alto = Number(url.searchParams.get("alto") ?? 0);
   const productId = url.searchParams.get("productId") ?? "";
 
+  console.log("[api.precio] Request recibido:", { shop, productId, ancho, alto });
+
   if (!shop || ancho <= 0 || alto <= 0) {
     return new Response(
       JSON.stringify({
@@ -30,6 +32,8 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 
   // Si se envía productId, buscar regla que aplique a ese producto
   // (productIds vacío = aplica a todos; productIds con entradas = solo esos productos)
+  console.log("[api.precio] Buscando regla para shop:", shop, "productId:", productId);
+
   const regla = productId
     ? await prisma.reglaPersonalizada.findFirst({
         where: {
@@ -46,11 +50,14 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       });
 
   if (!regla) {
+    console.log("[api.precio] No se encontró regla activa");
     return new Response(
       JSON.stringify({ error: "No hay regla activa para esta tienda." }),
       { status: 404, headers: corsHeaders },
     );
   }
+
+  console.log("[api.precio] Regla encontrada:", regla);
 
   const precio = Math.round(ancho * alto * regla.precioPorCm2);
   const waterproofPrecio = Math.round(ancho * alto * regla.waterproofPorCm2);

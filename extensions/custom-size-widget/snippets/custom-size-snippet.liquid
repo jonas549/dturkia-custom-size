@@ -285,6 +285,8 @@
     var productId = root.dataset.productId;
     if (!shop) return;
 
+    console.log('[CSW] Iniciando widget', { shop: shop, productId: productId });
+
     var apiUrl = APP_URL + '/api/precio'
       + '?shop='      + encodeURIComponent(shop)
       + '&ancho=100'
@@ -294,6 +296,7 @@
     fetch(apiUrl)
       .then(function (r) { return r.ok ? r.json() : null; })
       .then(function (data) {
+        console.log('[CSW] Respuesta de API:', data);
         if (!data || data.error) return; // sin regla activa → widget permanece oculto
 
         var regla          = data.regla;
@@ -342,7 +345,9 @@
           agregarAlCarrito(sAncho.value, sAlto.value, waterproofActivo);
         });
       })
-      .catch(function () { /* error silencioso — widget oculto */ });
+      .catch(function (err) {
+        console.log('[CSW] Error al llamar API:', err);
+      });
   }
 
   if (document.readyState === 'loading') {
