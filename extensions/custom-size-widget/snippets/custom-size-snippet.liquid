@@ -10,6 +10,7 @@
 <div id="csw-root"
      data-shop="{{ csw_shop }}"
      data-product-id="{{ csw_product }}"
+     data-variant-id="{{ product.selected_or_first_available_variant.id }}"
      style="display:none">
 
   <div class="csw-container">
@@ -228,11 +229,21 @@
   }
 
   function getVariantId() {
-    var input =
+    // 1. select[name="id"] — dropdown de variantes (más común en temas OS 1.0)
+    var sel = document.querySelector('form[action*="/cart/add"] select[name="id"]');
+    if (sel && sel.value) return sel.value;
+
+    // 2. input[name="id"] — input hidden o visible con la variante seleccionada
+    var inp =
       document.querySelector('form[action*="/cart/add"] input[name="id"]') ||
-      document.querySelector('input[name="id"]') ||
-      document.querySelector('[name="id"]');
-    return input ? input.value : null;
+      document.querySelector('input[name="id"]');
+    if (inp && inp.value) return inp.value;
+
+    // 3. Fallback Liquid: variante inyectada directamente en el HTML
+    var root = document.getElementById('csw-root');
+    if (root && root.dataset.variantId) return root.dataset.variantId;
+
+    return null;
   }
 
   function agregarAlCarrito(ancho, alto, waterproofActivo) {
