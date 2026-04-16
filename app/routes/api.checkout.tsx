@@ -68,16 +68,32 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 
   console.log("[api.checkout] Request:", { shop, variantId, ancho, alto, waterproof, precio, waterproofPrecio });
 
-  // Obtener offline token desde la tabla Session
+  // Obtener offline token desde la tabla Session.
+  // @shopify/shopify-app-remix guarda la sesión offline con id = "offline_{shop}".
+  // Fallback: cualquier sesión isOnline=false sin expirar, ordenando nulls first
+  // (tokens offline no tienen expires).
   const sql = neon(process.env.DIRECT_URL!);
 
+  const offlineId = `offline_${shop}`;
+
   const sessions = await sql`
-    SELECT "accessToken"
+    SELECT id, "accessToken", "isOnline", expires, scope
     FROM "Session"
-    WHERE shop = ${shop}
-      AND "isOnline" = false
-    LIMIT 1
+    WHERE id = ${offlineId}
+       OR (shop = ${shop} AND "isOnline" = false)
+    ORDER BY
+      CASE WHEN id = ${offlineId} THEN 0 ELSE 1 END,
+      expires DESC NULLS FIRST
+    LIMIT 5
   `;
+
+  console.log("[api.checkout] Sesiones encontradas:", sessions.map((s) => ({
+    id: s.id,
+    isOnline: s.isOnline,
+    expires: s.expires,
+    scope: s.scope,
+    tokenPrefix: (s.accessToken as string).slice(0, 10) + "...",
+  })));
 
   if (!sessions.length) {
     console.error("[api.checkout] No se encontró sesión offline para shop:", shop);
@@ -87,7 +103,11 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     );
   }
 
-  const accessToken = sessions[0].accessToken as string;
+  // Preferir la sesión offline_ canónica; si no, la primera disponible
+  const session = sessions.find((s) => s.id === offlineId) ?? sessions[0];
+  const accessToken = session.accessToken as string;
+
+  console.log("[api.checkout] Usando sesión id:", session.id, "scope:", session.scope);
 
   // Calcular precio total
   const precioTotal = (precio || 0) + (waterproof && waterproofPrecio ? waterproofPrecio : 0);
