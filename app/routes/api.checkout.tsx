@@ -40,7 +40,6 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 
   let body: {
     shop?: string;
-    variantId?: string | number;
     ancho?: number;
     alto?: number;
     waterproof?: boolean;
@@ -57,22 +56,23 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     });
   }
 
-  const { shop, variantId, ancho, alto, waterproof, precio, waterproofPrecio } = body;
+  const { shop, ancho, alto, waterproof, precio, waterproofPrecio } = body;
 
-  if (!shop || !variantId || !ancho || !alto || precio === undefined) {
+  if (!shop || !ancho || !alto || precio === undefined) {
     return new Response(
-      JSON.stringify({ error: "Parámetros requeridos: shop, variantId, ancho, alto, precio" }),
+      JSON.stringify({ error: "Parámetros requeridos: shop, ancho, alto, precio" }),
       { status: 400, headers: corsHeaders },
     );
   }
 
-  console.log("[api.checkout] Request:", { shop, variantId, ancho, alto, waterproof, precio, waterproofPrecio });
+  console.log("[api.checkout] Request:", { shop, ancho, alto, waterproof, precio, waterproofPrecio });
 
   // Obtener offline token desde la tabla Session.
   // @shopify/shopify-app-remix guarda la sesión offline con id = "offline_{shop}".
   // Fallback: cualquier sesión isOnline=false sin expirar, ordenando nulls first
   // (tokens offline no tienen expires).
-  const sql = neon(process.env.DIRECT_URL!);
+  // DIRECT_URL preferido (no-pooler); fallback a DATABASE_URL si no está en Vercel
+  const sql = neon(process.env.DIRECT_URL ?? process.env.DATABASE_URL!);
 
   const offlineId = `offline_${shop}`;
 
@@ -118,14 +118,15 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     { name: "Impermeabilizador", value: waterproof ? "Sí" : "No" },
   ];
 
+  // Sin variant_id: Shopify ignora price cuando variant_id está presente y usa el precio del variant.
+  // Line item custom (title + price) respeta el precio enviado.
   const draftOrderPayload = {
     draft_order: {
       line_items: [
         {
-          variant_id: parseInt(String(variantId), 10),
+          title: "Alfombra Medida Personalizada",
           quantity: 1,
           price: precioTotal.toFixed(2),
-          title: "Alfombra Medida Personalizada",
           properties,
         },
       ],
