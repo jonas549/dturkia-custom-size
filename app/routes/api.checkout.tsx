@@ -112,11 +112,10 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   // Calcular precio total
   const precioTotal = (precio || 0) + (waterproof && waterproofPrecio ? waterproofPrecio : 0);
 
-  // Propiedades del line item
   const properties = [
-    { name: "_Ancho personalizado", value: `${ancho} cm` },
-    { name: "_Alto personalizado", value: `${alto} cm` },
-    { name: "_Impermeabilizador", value: waterproof ? "Sí" : "No" },
+    { name: "Ancho", value: `${ancho} cm` },
+    { name: "Alto", value: `${alto} cm` },
+    { name: "Impermeabilizador", value: waterproof ? "Sí" : "No" },
   ];
 
   const draftOrderPayload = {
@@ -125,7 +124,8 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         {
           variant_id: parseInt(String(variantId), 10),
           quantity: 1,
-          price: String(precioTotal),
+          price: precioTotal.toFixed(2),
+          title: "Alfombra Medida Personalizada",
           properties,
         },
       ],
