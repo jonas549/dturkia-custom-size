@@ -45,6 +45,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     waterproof?: boolean;
     precio?: number;
     waterproofPrecio?: number;
+    cartItems?: Array<{ variant_id: number; quantity: number }>;
   };
 
   try {
@@ -56,7 +57,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     });
   }
 
-  const { shop, ancho, alto, waterproof, precio, waterproofPrecio } = body;
+  const { shop, ancho, alto, waterproof, precio, waterproofPrecio, cartItems } = body;
 
   if (!shop || !ancho || !alto || precio === undefined) {
     return new Response(
@@ -118,18 +119,23 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     { name: "Impermeabilizador", value: waterproof ? "Sí" : "No" },
   ];
 
-  // Sin variant_id: Shopify ignora price cuando variant_id está presente y usa el precio del variant.
-  // Line item custom (title + price) respeta el precio enviado.
+  // Items del carrito Shopify (variant_id + quantity, sin price — Shopify usa el precio real)
+  const regularItems = (cartItems || []).map((item) => ({
+    variant_id: item.variant_id,
+    quantity: item.quantity,
+  }));
+
+  // Item personalizado sin variant_id para que Shopify respete el price calculado
+  const customItem = {
+    title: "Alfombra Medida Personalizada",
+    quantity: 1,
+    price: precioTotal.toFixed(2),
+    properties,
+  };
+
   const draftOrderPayload = {
     draft_order: {
-      line_items: [
-        {
-          title: "Alfombra Medida Personalizada",
-          quantity: 1,
-          price: precioTotal.toFixed(2),
-          properties,
-        },
-      ],
+      line_items: [...regularItems, customItem],
     },
   };
 

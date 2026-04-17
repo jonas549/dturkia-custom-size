@@ -338,74 +338,36 @@
           });
         }
 
-        // Evento botón — lógica Draft Orders
+        // Evento botón — guarda en localStorage y abre mini-cart
         eid('csw-agregar').addEventListener('click', function () {
           mostrarError('');
 
-          var variantId = getVariantId();
-          if (!variantId) {
-            mostrarError('No se pudo obtener la variante del producto. Por favor recarga la página.');
-            return;
-          }
-
-          var anchoN = parseInt(sAncho.value, 10);
-          var altoN  = parseInt(sAlto.value,  10);
-          var area   = anchoN * altoN;
+          var anchoN    = parseInt(sAncho.value, 10);
+          var altoN     = parseInt(sAlto.value,  10);
+          var area      = anchoN * altoN;
           var wpChecked = waterproofActivo && eid('csw-waterproof') && eid('csw-waterproof').checked;
 
           var precioAlfombra = Math.round(area * precioCm2);
           var precioWp       = Math.round(area * waterproofCm2);
 
-          var btn = eid('csw-agregar');
-          btn.disabled    = true;
-          btn.textContent = 'PROCESANDO...';
-
-          fetch(APP_URL + '/api/checkout', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
+          try {
+            localStorage.setItem('csw_pending_order', JSON.stringify({
               shop:             shop,
-              variantId:        variantId,
               ancho:            anchoN,
               alto:             altoN,
               waterproof:       !!wpChecked,
               precio:           precioAlfombra,
               waterproofPrecio: precioWp
-            })
-          })
-          .then(function (r) { return r.json(); })
-          .then(function (result) {
-            if (result.error || !result.checkoutUrl) {
-              mostrarError('Error al procesar el pedido. Por favor intenta nuevamente.');
-              console.error('[CSW] Error checkout:', result);
-              btn.disabled    = false;
-              btn.textContent = 'AGREGAR A LA BOLSA';
-              return;
-            }
+            }));
+          } catch (e) {
+            mostrarError('Error al guardar el pedido. Por favor intenta nuevamente.');
+            return;
+          }
 
-            // Guardar pedido pendiente en localStorage
-            try {
-              localStorage.setItem('csw_pending_order', JSON.stringify({
-                checkoutUrl: result.checkoutUrl,
-                ancho:       anchoN,
-                alto:        altoN,
-                waterproof:  !!wpChecked,
-                precio:      precioAlfombra + (wpChecked ? precioWp : 0),
-                createdAt:   Date.now()
-              }));
-            } catch (e) {
-              // localStorage puede no estar disponible en algunos contextos
-            }
-
-            // Redirigir al checkout del draft order
-            window.location.href = result.checkoutUrl;
-          })
-          .catch(function (err) {
-            console.error('[CSW] Error de red:', err);
-            mostrarError('Error de conexión. Por favor intenta nuevamente.');
-            btn.disabled    = false;
-            btn.textContent = 'AGREGAR A LA BOLSA';
-          });
+          // Abrir mini-cart con el item custom visible
+          if (typeof update_mini_cart === 'function') {
+            update_mini_cart(true);
+          }
         });
       })
       .catch(function (err) {
