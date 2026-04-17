@@ -139,10 +139,23 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     },
   };
 
+  // Validar token antes de usarlo — diferencia token revocado de otros errores
+  const tokenCheckResponse = await fetch(
+    `https://${shop}/admin/api/2025-10/shop.json`,
+    { headers: { "X-Shopify-Access-Token": accessToken } },
+  );
+  if (tokenCheckResponse.status === 401) {
+    console.error("[api.checkout] Token revocado para shop:", shop, "sessionId:", session.id);
+    return new Response(
+      JSON.stringify({ error: "TOKEN_REVOKED", message: "El token está revocado. El merchant debe reinstalar la app." }),
+      { status: 401, headers: corsHeaders },
+    );
+  }
+
   console.log("[api.checkout] Creando draft order para shop:", shop, "precio:", precioTotal);
 
   const shopifyResponse = await fetch(
-    `https://${shop}/admin/api/2026-07/draft_orders.json`,
+    `https://${shop}/admin/api/2025-10/draft_orders.json`,
     {
       method: "POST",
       headers: {
