@@ -11,6 +11,7 @@
      data-shop="{{ csw_shop }}"
      data-product-id="{{ csw_product }}"
      data-variant-id="{{ product.selected_or_first_available_variant.id }}"
+     data-image-url="{{ product.featured_image | image_url: width: 400 }}"
      style="display:none">
 
   <div class="csw-container">
@@ -365,7 +366,10 @@
               alto:             altoN,
               waterproof:       !!wpChecked,
               precio:           precioAlfombra,
-              waterproofPrecio: precioWp
+              waterproofPrecio: precioWp,
+              variantId:        root.dataset.variantId || '',
+              imageUrl:         root.dataset.imageUrl  || '',
+              createdAt:        Date.now()
             }));
           } catch (e) {
             mostrarError('Error al guardar el pedido. Por favor intenta nuevamente.');

@@ -46,6 +46,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     precio?: number;
     waterproofPrecio?: number;
     cartItems?: Array<{ variant_id: number; quantity: number }>;
+    variantId?: number | string;
   };
 
   try {
@@ -57,7 +58,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     });
   }
 
-  const { shop, ancho, alto, waterproof, precio, waterproofPrecio, cartItems } = body;
+  const { shop, ancho, alto, waterproof, precio, waterproofPrecio, cartItems, variantId } = body;
 
   if (!shop || !ancho || !alto || precio === undefined) {
     return new Response(
@@ -125,13 +126,19 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     quantity: item.quantity,
   }));
 
-  // Item personalizado sin variant_id para que Shopify respete el price calculado
-  const customItem = {
-    title: "Alfombra Medida Personalizada",
+  // Con variant_id: Shopify muestra la imagen del producto y respeta el price override.
+  // Sin variant_id (fallback): line item custom con title explícito.
+  const parsedVariantId = variantId ? Number(variantId) : null;
+  const customItem: Record<string, unknown> = {
     quantity: 1,
     price: precioTotal.toFixed(2),
     properties,
   };
+  if (parsedVariantId) {
+    customItem.variant_id = parsedVariantId;
+  } else {
+    customItem.title = "Alfombra Medida Personalizada";
+  }
 
   const draftOrderPayload = {
     draft_order: {
