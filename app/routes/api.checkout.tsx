@@ -126,19 +126,14 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     quantity: item.quantity,
   }));
 
-  // Con variant_id: Shopify muestra la imagen del producto y respeta el price override.
-  // Sin variant_id (fallback): line item custom con title explícito.
-  const parsedVariantId = variantId ? Number(variantId) : null;
-  const customItem: Record<string, unknown> = {
+  // Line item custom sin variant_id — Shopify respeta el price calculado.
+  // (Con variant_id, Shopify ignora el price override y usa el precio del variant.)
+  const customItem = {
+    title: "Alfombra Medida Personalizada",
     quantity: 1,
     price: precioTotal.toFixed(2),
     properties,
   };
-  if (parsedVariantId) {
-    customItem.variant_id = parsedVariantId;
-  } else {
-    customItem.title = "Alfombra Medida Personalizada";
-  }
 
   const draftOrderPayload = {
     draft_order: {
