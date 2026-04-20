@@ -323,6 +323,14 @@
         calcular(precioCm2, waterproofCm2, waterproofActivo);
         root.style.display = ''; // mostrar widget
 
+        // Ocultar precio nativo y formulario nativo (este producto usa medidas personalizadas)
+        var nativeForm = document.getElementById('product-add');
+        if (nativeForm) nativeForm.style.display = 'none';
+        var nativePrice = document.querySelector('.product .right .price');
+        if (nativePrice) nativePrice.style.display = 'none';
+        var nativeRemain = document.querySelector('.product .right .remain');
+        if (nativeRemain) nativeRemain.style.display = 'none';
+
         // Eventos sliders
         sAncho.addEventListener('input', function () {
           eid('csw-ancho-val').textContent = sAncho.value;
