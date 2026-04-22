@@ -39,9 +39,9 @@ model ReglaPersonalizada {
   maxAncho         Int
   minAlto          Int
   maxAlto          Int
-  precioPorCm2     Float
+  precioPorM2      Float
   waterproofActivo Boolean  @default(true)
-  waterproofPorCm2 Float    @default(0)
+  waterproofPorM2  Float    @default(0)
   activa           Boolean  @default(true)
   productIds       String[] @default([])
   createdAt        DateTime @default(now())

@@ -47,6 +47,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     waterproofPrecio?: number;
     cartItems?: Array<{ variant_id: number; quantity: number }>;
     variantId?: number | string;
+    productTitle?: string;
   };
 
   try {
@@ -58,7 +59,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     });
   }
 
-  const { shop, ancho, alto, waterproof, precio, waterproofPrecio, cartItems, variantId } = body;
+  const { shop, ancho, alto, waterproof, precio, waterproofPrecio, cartItems, variantId, productTitle } = body;
 
   if (!shop || !ancho || !alto || precio === undefined) {
     return new Response(
@@ -128,8 +129,9 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 
   // Line item custom sin variant_id — Shopify respeta el price calculado.
   // (Con variant_id, Shopify ignora el price override y usa el precio del variant.)
+  const baseTitle = productTitle || "Alfombra Medida Personalizada";
   const customItem = {
-    title: "Alfombra Medida Personalizada",
+    title: `${baseTitle} — ${ancho}cm × ${alto}cm`,
     quantity: 1,
     price: precioTotal.toFixed(2),
     properties,

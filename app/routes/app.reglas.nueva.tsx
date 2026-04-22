@@ -37,9 +37,9 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       maxAncho: Number(fd.get("maxAncho")),
       minAlto: Number(fd.get("minAlto")),
       maxAlto: Number(fd.get("maxAlto")),
-      precioPorCm2: Number(fd.get("precioPorCm2")),
+      precioPorM2: Number(fd.get("precioPorM2")),
       waterproofActivo: fd.get("waterproofActivo") === "on",
-      waterproofPorCm2: Number(fd.get("waterproofPorCm2") ?? 0),
+      waterproofPorM2: Number(fd.get("waterproofPorM2") ?? 0),
       activa: fd.get("activa") === "on",
       productIds,
     },
@@ -261,18 +261,18 @@ export default function NuevaRegla() {
             </div>
           </div>
 
-          {/* Precio por cm² */}
+          {/* Precio por m² */}
           <div style={field}>
-            <label style={labelStyle} htmlFor="precioPorCm2">
-              Precio por cm² (CLP)
+            <label style={labelStyle} htmlFor="precioPorM2">
+              Precio por m² (CLP)
             </label>
             <input
-              id="precioPorCm2"
-              name="precioPorCm2"
+              id="precioPorM2"
+              name="precioPorM2"
               type="number"
               min={0}
-              step="0.0001"
-              defaultValue={0.0025}
+              step="1"
+              defaultValue={70000}
               style={inputStyle}
               required
             />
@@ -299,22 +299,22 @@ export default function NuevaRegla() {
           {/* Precio impermeabilizador (condicional) */}
           {waterproofActivo && (
             <div style={field}>
-              <label style={labelStyle} htmlFor="waterproofPorCm2">
-                Precio impermeabilizador por cm² (CLP)
+              <label style={labelStyle} htmlFor="waterproofPorM2">
+                Precio impermeabilizador por m² (CLP)
               </label>
               <input
-                id="waterproofPorCm2"
-                name="waterproofPorCm2"
+                id="waterproofPorM2"
+                name="waterproofPorM2"
                 type="number"
                 min={0}
-                step="0.0001"
-                defaultValue={0.001}
+                step="1"
+                defaultValue={13100}
                 style={inputStyle}
               />
             </div>
           )}
           {!waterproofActivo && (
-            <input type="hidden" name="waterproofPorCm2" value="0" />
+            <input type="hidden" name="waterproofPorM2" value="0" />
           )}
 
           {/* Toggle: activa */}

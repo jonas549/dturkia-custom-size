@@ -61,16 +61,20 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   const regla = rows[0];
   console.log("[api.precio] Regla encontrada:", regla);
 
-  const precio = Math.round(ancho * alto * regla.precioPorCm2);
-  const waterproofPrecio = Math.round(ancho * alto * regla.waterproofPorCm2);
+  // Redondear cm → m hacia arriba (ej: 230cm → 3m) y cobrar por m² enteros
+  const anchoM = Math.ceil(ancho / 100);
+  const altoM  = Math.ceil(alto  / 100);
+  const m2     = anchoM * altoM;
+  const precio = Math.round(m2 * regla.precioPorM2);
+  const waterproofPrecio = Math.round(m2 * regla.waterproofPorM2);
 
   return new Response(
     JSON.stringify({
       precio,
       waterproofPrecio,
       waterproofActivo: regla.waterproofActivo,
-      precioPorCm2: regla.precioPorCm2,
-      waterproofPorCm2: regla.waterproofPorCm2,
+      precioPorM2: regla.precioPorM2,
+      waterproofPorM2: regla.waterproofPorM2,
       regla: {
         minAncho: regla.minAncho,
         maxAncho: regla.maxAncho,
