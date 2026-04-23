@@ -48,12 +48,14 @@ model ReglaPersonalizada {
 }
 
 model PedidoCustom {
-  id          String   @id @default(cuid())
-  shop        String
-  orderId     String
-  ancho       Int
-  alto        Int
-  waterproof  Boolean  @default(false)
-  precioTotal Float
-  createdAt   DateTime @default(now())
+  id           String   @id @default(cuid())
+  shop         String
+  orderId      String
+  ancho        Int
+  alto         Int
+  waterproof   Boolean  @default(false)
+  precioTotal  Float
+  estado       String   @default("pendiente")
+  productTitle String   @default("")
+  createdAt    DateTime @default(now())
 }

@@ -6,15 +6,27 @@
 
 {% assign csw_shop    = shop.permanent_domain %}
 {% assign csw_product = product.id | prepend: 'gid://shopify/Product/' %}
+{% assign csw_instant = false %}
+{% if product.tags contains 'medida-personalizada' %}
+  {% assign csw_instant = true %}
+{% endif %}
 
 <div id="csw-root"
      data-shop="{{ csw_shop }}"
      data-product-id="{{ csw_product }}"
      data-variant-id="{{ product.selected_or_first_available_variant.id }}"
      data-image-url="{{ product.featured_image | image_url: width: 400 }}"
-     style="display:none">
+     {% unless csw_instant %}style="display:none"{% endunless %}>
 
-  <div class="csw-container">
+  {% if csw_instant %}
+  <div id="csw-loading">
+    <div style="padding:32px 0;text-align:center;color:#9A9A9A;font-size:0.8125em;letter-spacing:0.5px">
+      Cargando configurador&hellip;
+    </div>
+  </div>
+  {% endif %}
+
+  <div class="csw-container" {% if csw_instant %}style="display:none"{% endif %}>
     <h3 class="csw-title">Medida Personalizada</h3>
 
     <div class="csw-slider-group">
@@ -182,7 +194,6 @@
     font-size: var(--f16, 1em);
   }
 
-  /* Botón idéntico al add-to-cart nativo del tema */
   .csw-btn {
     display: block;
     width: 100%;
@@ -231,6 +242,15 @@
 
   function eid(id) { return document.getElementById(id); }
 
+  function mostrarNativos() {
+    var nativeForm = document.getElementById('product-add');
+    if (nativeForm) nativeForm.style.display = '';
+    var nativePrice = document.querySelector('.product .right .price');
+    if (nativePrice) nativePrice.style.display = '';
+    var nativeRemain = document.querySelector('.product .right .remain');
+    if (nativeRemain) nativeRemain.style.display = '';
+  }
+
   function mostrarError(msg) {
     var el = eid('csw-error');
     if (!el) return;
@@ -260,17 +280,14 @@
   }
 
   function getVariantId() {
-    // 1. select[name="id"] — dropdown de variantes (más común en temas OS 1.0)
     var sel = document.querySelector('form[action*="/cart/add"] select[name="id"]');
     if (sel && sel.value) return sel.value;
 
-    // 2. input[name="id"] — input hidden o visible con la variante seleccionada
     var inp =
       document.querySelector('form[action*="/cart/add"] input[name="id"]') ||
       document.querySelector('input[name="id"]');
     if (inp && inp.value) return inp.value;
 
-    // 3. Fallback Liquid: variante inyectada directamente en el HTML
     var root = document.getElementById('csw-root');
     if (root && root.dataset.variantId) return root.dataset.variantId;
 
@@ -294,7 +311,15 @@
     fetch(apiUrl)
       .then(function (r) { return r.ok ? r.json() : null; })
       .then(function (data) {
-        if (!data || data.error) return; // sin regla activa → widget permanece oculto
+        var loadingEl   = eid('csw-loading');
+        var containerEl = root.querySelector('.csw-container');
+
+        if (!data || data.error) {
+          // Sin regla activa: ocultar widget y restaurar elementos nativos
+          root.style.display = 'none';
+          mostrarNativos();
+          return;
+        }
 
         var regla            = data.regla;
         var precioPorM2      = data.precioPorM2      || 0;
@@ -322,9 +347,13 @@
         }
 
         calcular(precioPorM2, waterproofPorM2, waterproofActivo);
-        root.style.display = ''; // mostrar widget
 
-        // Ocultar precio nativo y formulario nativo (este producto usa medidas personalizadas)
+        // Transición loading → widget
+        if (loadingEl)   loadingEl.style.display   = 'none';
+        if (containerEl) containerEl.style.display = '';
+        root.style.display = '';
+
+        // Ocultar precio nativo y formulario nativo
         var nativeForm = document.getElementById('product-add');
         if (nativeForm) nativeForm.style.display = 'none';
         var nativePrice = document.querySelector('.product .right .price');
@@ -347,7 +376,7 @@
           });
         }
 
-        // Evento botón — guarda en localStorage y abre mini-cart
+        // Evento botón
         eid('csw-agregar').addEventListener('click', function () {
           mostrarError('');
 
@@ -369,6 +398,7 @@
               waterproofPrecio: precioWp,
               variantId:        root.dataset.variantId || '',
               imageUrl:         root.dataset.imageUrl  || '',
+              productTitle:     (document.querySelector('.product h1') || {}).textContent || '',
               createdAt:        Date.now()
             }));
           } catch (e) {
@@ -376,7 +406,6 @@
             return;
           }
 
-          // Abrir mini-cart con el item custom visible
           if (typeof update_mini_cart === 'function') {
             update_mini_cart(true);
           }
@@ -384,6 +413,10 @@
       })
       .catch(function (err) {
         console.log('[CSW] Error al llamar API precio:', err);
+        // Si falla la API completamente, restaurar nativos
+        var root = document.getElementById('csw-root');
+        if (root) root.style.display = 'none';
+        mostrarNativos();
       });
   }
 

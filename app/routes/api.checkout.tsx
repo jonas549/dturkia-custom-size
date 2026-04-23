@@ -1,5 +1,6 @@
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
 import { neon } from "@neondatabase/serverless";
+import { randomUUID } from "node:crypto";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -26,7 +27,6 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 };
 
 export const action = async ({ request }: ActionFunctionArgs) => {
-  // Algunos clientes envían OPTIONS al action también
   if (request.method === "OPTIONS") {
     return new Response(null, { status: 204, headers: preflightHeaders });
   }
@@ -70,11 +70,6 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 
   console.log("[api.checkout] Request:", { shop, ancho, alto, waterproof, precio, waterproofPrecio });
 
-  // Obtener offline token desde la tabla Session.
-  // @shopify/shopify-app-remix guarda la sesión offline con id = "offline_{shop}".
-  // Fallback: cualquier sesión isOnline=false sin expirar, ordenando nulls first
-  // (tokens offline no tienen expires).
-  // DIRECT_URL preferido (no-pooler); fallback a DATABASE_URL si no está en Vercel
   const sql = neon(process.env.DIRECT_URL ?? process.env.DATABASE_URL!);
 
   const offlineId = `offline_${shop}`;
@@ -106,13 +101,11 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     );
   }
 
-  // Preferir la sesión offline_ canónica; si no, la primera disponible
   const session = sessions.find((s) => s.id === offlineId) ?? sessions[0];
   const accessToken = session.accessToken as string;
 
   console.log("[api.checkout] Usando sesión id:", session.id, "scope:", session.scope);
 
-  // Calcular precio total
   const precioTotal = (precio || 0) + (waterproof && waterproofPrecio ? waterproofPrecio : 0);
 
   const properties = [
@@ -121,14 +114,11 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     { name: "Impermeabilizador", value: waterproof ? "Sí" : "No" },
   ];
 
-  // Items del carrito Shopify (variant_id + quantity, sin price — Shopify usa el precio real)
   const regularItems = (cartItems || []).map((item) => ({
     variant_id: item.variant_id,
     quantity: item.quantity,
   }));
 
-  // Line item custom sin variant_id — Shopify respeta el price calculado.
-  // (Con variant_id, Shopify ignora el price override y usa el precio del variant.)
   const baseTitle = productTitle || "Alfombra Medida Personalizada";
   const customItem = {
     title: `${baseTitle} — ${ancho}cm × ${alto}cm`,
@@ -143,7 +133,6 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     },
   };
 
-  // Validar token antes de usarlo — diferencia token revocado de otros errores
   const tokenCheckResponse = await fetch(
     `https://${shop}/admin/api/2025-10/shop.json`,
     { headers: { "X-Shopify-Access-Token": accessToken } },
@@ -170,7 +159,10 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     },
   );
 
-  const shopifyData = await shopifyResponse.json() as { draft_order?: { invoice_url?: string }; errors?: unknown };
+  const shopifyData = await shopifyResponse.json() as {
+    draft_order?: { invoice_url?: string; id?: number };
+    errors?: unknown;
+  };
 
   if (!shopifyResponse.ok || !shopifyData.draft_order?.invoice_url) {
     console.error("[api.checkout] Error de Shopify:", shopifyData);
@@ -181,10 +173,34 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   }
 
   const checkoutUrl = shopifyData.draft_order.invoice_url;
-  console.log("[api.checkout] Draft order creado. Invoice URL:", checkoutUrl);
+  const draftOrderId = String(shopifyData.draft_order.id ?? "");
+
+  console.log("[api.checkout] Draft order creado. ID:", draftOrderId, "URL:", checkoutUrl);
+
+  // Registrar PedidoCustom en DB — no bloquea el checkout si falla
+  try {
+    await sql`
+      INSERT INTO "PedidoCustom" (id, shop, "orderId", ancho, alto, waterproof, "precioTotal", estado, "productTitle", "createdAt")
+      VALUES (
+        ${randomUUID()},
+        ${shop},
+        ${draftOrderId},
+        ${ancho},
+        ${alto},
+        ${waterproof ?? false},
+        ${precioTotal},
+        'pendiente',
+        ${productTitle ?? ""},
+        NOW()
+      )
+    `;
+    console.log("[api.checkout] PedidoCustom registrado. orderId:", draftOrderId);
+  } catch (insertErr) {
+    console.error("[api.checkout] Error registrando PedidoCustom:", insertErr);
+  }
 
   return new Response(
-    JSON.stringify({ checkoutUrl }),
+    JSON.stringify({ checkoutUrl, draftOrderId }),
     { status: 200, headers: corsHeaders },
   );
 };
