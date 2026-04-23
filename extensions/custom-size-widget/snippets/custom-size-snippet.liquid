@@ -238,13 +238,13 @@
     el.style.display = msg ? '' : 'none';
   }
 
-  function calcular(precioCm2, waterproofCm2, waterproofActivo) {
+  function calcular(precioPorM2, waterproofPorM2, waterproofActivo) {
     var ancho = parseInt(eid('csw-ancho').value, 10);
     var alto  = parseInt(eid('csw-alto').value,  10);
-    var area  = ancho * alto;
+    var m2    = Math.ceil(ancho / 100) * Math.ceil(alto / 100);
 
-    var precioAlfombra   = Math.round(area * precioCm2);
-    var precioWaterproof = Math.round(area * waterproofCm2);
+    var precioAlfombra   = Math.round(m2 * precioPorM2);
+    var precioWaterproof = Math.round(m2 * waterproofPorM2);
     var wpChecked = waterproofActivo && eid('csw-waterproof') && eid('csw-waterproof').checked;
 
     eid('csw-precio-alfombra').textContent = fmt.format(precioAlfombra);
@@ -297,8 +297,8 @@
         if (!data || data.error) return; // sin regla activa → widget permanece oculto
 
         var regla            = data.regla;
-        var precioCm2        = data.precioPorCm2     || 0;
-        var waterproofCm2    = data.waterproofPorCm2 || 0;
+        var precioPorM2      = data.precioPorM2      || 0;
+        var waterproofPorM2  = data.waterproofPorM2  || 0;
         var waterproofActivo = !!data.waterproofActivo;
 
         // Configurar sliders
@@ -321,7 +321,7 @@
           eid('csw-waterproof-section').style.display = '';
         }
 
-        calcular(precioCm2, waterproofCm2, waterproofActivo);
+        calcular(precioPorM2, waterproofPorM2, waterproofActivo);
         root.style.display = ''; // mostrar widget
 
         // Ocultar precio nativo y formulario nativo (este producto usa medidas personalizadas)
@@ -335,15 +335,15 @@
         // Eventos sliders
         sAncho.addEventListener('input', function () {
           eid('csw-ancho-val').textContent = sAncho.value;
-          calcular(precioCm2, waterproofCm2, waterproofActivo);
+          calcular(precioPorM2, waterproofPorM2, waterproofActivo);
         });
         sAlto.addEventListener('input', function () {
           eid('csw-alto-val').textContent = sAlto.value;
-          calcular(precioCm2, waterproofCm2, waterproofActivo);
+          calcular(precioPorM2, waterproofPorM2, waterproofActivo);
         });
         if (waterproofActivo && eid('csw-waterproof')) {
           eid('csw-waterproof').addEventListener('change', function () {
-            calcular(precioCm2, waterproofCm2, waterproofActivo);
+            calcular(precioPorM2, waterproofPorM2, waterproofActivo);
           });
         }
 
@@ -353,11 +353,11 @@
 
           var anchoN    = parseInt(sAncho.value, 10);
           var altoN     = parseInt(sAlto.value,  10);
-          var area      = anchoN * altoN;
+          var m2        = Math.ceil(anchoN / 100) * Math.ceil(altoN / 100);
           var wpChecked = waterproofActivo && eid('csw-waterproof') && eid('csw-waterproof').checked;
 
-          var precioAlfombra = Math.round(area * precioCm2);
-          var precioWp       = Math.round(area * waterproofCm2);
+          var precioAlfombra = Math.round(m2 * precioPorM2);
+          var precioWp       = Math.round(m2 * waterproofPorM2);
 
           try {
             localStorage.setItem('csw_pending_order', JSON.stringify({
