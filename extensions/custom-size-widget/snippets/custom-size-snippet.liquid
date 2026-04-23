@@ -6,9 +6,23 @@
 
 {% assign csw_shop    = shop.permanent_domain %}
 {% assign csw_product = product.id | prepend: 'gid://shopify/Product/' %}
-{% assign csw_instant = false %}
-{% if product.tags contains 'medida-personalizada' %}
-  {% assign csw_instant = true %}
+
+{%- assign csw_instant = false -%}
+{%- for _t in product.tags -%}
+  {%- if _t | downcase == 'medida-personalizada' -%}
+    {%- assign csw_instant = true -%}
+  {%- endif -%}
+{%- endfor -%}
+
+{% if csw_instant %}
+<script>document.documentElement.classList.add('csw-natives-hidden');</script>
+<style>
+  .csw-natives-hidden .product .right .price,
+  .csw-natives-hidden #product-add,
+  .csw-natives-hidden .product .right .remain {
+    display: none !important;
+  }
+</style>
 {% endif %}
 
 <div id="csw-root"
@@ -242,13 +256,9 @@
 
   function eid(id) { return document.getElementById(id); }
 
+  // Quita la clase que oculta nativos (usada tanto en éxito con regla como en fallback)
   function mostrarNativos() {
-    var nativeForm = document.getElementById('product-add');
-    if (nativeForm) nativeForm.style.display = '';
-    var nativePrice = document.querySelector('.product .right .price');
-    if (nativePrice) nativePrice.style.display = '';
-    var nativeRemain = document.querySelector('.product .right .remain');
-    if (nativeRemain) nativeRemain.style.display = '';
+    document.documentElement.classList.remove('csw-natives-hidden');
   }
 
   function mostrarError(msg) {
@@ -279,21 +289,6 @@
     eid('csw-precio-total').textContent = fmt.format(total);
   }
 
-  function getVariantId() {
-    var sel = document.querySelector('form[action*="/cart/add"] select[name="id"]');
-    if (sel && sel.value) return sel.value;
-
-    var inp =
-      document.querySelector('form[action*="/cart/add"] input[name="id"]') ||
-      document.querySelector('input[name="id"]');
-    if (inp && inp.value) return inp.value;
-
-    var root = document.getElementById('csw-root');
-    if (root && root.dataset.variantId) return root.dataset.variantId;
-
-    return null;
-  }
-
   function init() {
     var root = document.getElementById('csw-root');
     if (!root) return;
@@ -302,8 +297,14 @@
     var productId = root.dataset.productId;
     if (!shop) return;
 
+    // Timeout de seguridad: si la API no responde en 8s, restaurar nativos
+    var safetyTimer = setTimeout(function() {
+      root.style.display = 'none';
+      mostrarNativos();
+    }, 8000);
+
     var apiUrl = APP_URL + '/api/precio'
-      + '?shop='      + encodeURIComponent(shop)
+      + '?shop='   + encodeURIComponent(shop)
       + '&ancho=100'
       + '&alto=100'
       + (productId ? '&productId=' + encodeURIComponent(productId) : '');
@@ -311,19 +312,21 @@
     fetch(apiUrl)
       .then(function (r) { return r.ok ? r.json() : null; })
       .then(function (data) {
+        clearTimeout(safetyTimer);
+
         var loadingEl   = eid('csw-loading');
         var containerEl = root.querySelector('.csw-container');
 
         if (!data || data.error) {
-          // Sin regla activa: ocultar widget y restaurar elementos nativos
+          // Sin regla: ocultar widget y restaurar elementos nativos
           root.style.display = 'none';
           mostrarNativos();
           return;
         }
 
         var regla            = data.regla;
-        var precioPorM2      = data.precioPorM2      || 0;
-        var waterproofPorM2  = data.waterproofPorM2  || 0;
+        var precioPorM2      = data.precioPorM2     || 0;
+        var waterproofPorM2  = data.waterproofPorM2 || 0;
         var waterproofActivo = !!data.waterproofActivo;
 
         // Configurar sliders
@@ -352,14 +355,7 @@
         if (loadingEl)   loadingEl.style.display   = 'none';
         if (containerEl) containerEl.style.display = '';
         root.style.display = '';
-
-        // Ocultar precio nativo y formulario nativo
-        var nativeForm = document.getElementById('product-add');
-        if (nativeForm) nativeForm.style.display = 'none';
-        var nativePrice = document.querySelector('.product .right .price');
-        if (nativePrice) nativePrice.style.display = 'none';
-        var nativeRemain = document.querySelector('.product .right .remain');
-        if (nativeRemain) nativeRemain.style.display = 'none';
+        // Los nativos quedan ocultos por la clase .csw-natives-hidden (CSS server-side)
 
         // Eventos sliders
         sAncho.addEventListener('input', function () {
@@ -376,7 +372,7 @@
           });
         }
 
-        // Evento botón
+        // Botón "Agregar a la bolsa"
         eid('csw-agregar').addEventListener('click', function () {
           mostrarError('');
 
@@ -411,9 +407,8 @@
           }
         });
       })
-      .catch(function (err) {
-        console.log('[CSW] Error al llamar API precio:', err);
-        // Si falla la API completamente, restaurar nativos
+      .catch(function () {
+        clearTimeout(safetyTimer);
         var root = document.getElementById('csw-root');
         if (root) root.style.display = 'none';
         mostrarNativos();
