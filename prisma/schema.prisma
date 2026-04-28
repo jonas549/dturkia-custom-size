@@ -57,5 +57,30 @@ model PedidoCustom {
   precioTotal  Float
   estado       String   @default("pendiente")
   productTitle String   @default("")
+  tipo         String   @default("medida")
   createdAt    DateTime @default(now())
+}
+
+model ReglaImpermeabilizador {
+  id           String                      @id @default(cuid())
+  shop         String
+  productId    String
+  productTitle String                      @default("")
+  activa       Boolean                     @default(true)
+  createdAt    DateTime                    @default(now())
+  variantes    VarianteImpermeabilizador[]
+
+  @@unique([shop, productId])
+}
+
+model VarianteImpermeabilizador {
+  id           String                 @id @default(cuid())
+  reglaId      String
+  regla        ReglaImpermeabilizador @relation(fields: [reglaId], references: [id], onDelete: Cascade)
+  variantId    String
+  variantTitle String                 @default("")
+  precio       Float
+  aplica       Boolean                @default(true)
+
+  @@unique([reglaId, variantId])
 }

@@ -19,7 +19,8 @@ export default function App() {
     <AppProvider embedded apiKey={apiKey}>
       <s-app-nav>
         <s-link href="/app">Inicio</s-link>
-        <s-link href="/app/reglas">Reglas de medidas</s-link>
+        <s-link href="/app/reglas">Medidas personalizadas</s-link>
+        <s-link href="/app/impermeabilizador">Impermeabilizador</s-link>
       </s-app-nav>
       <Outlet />
     </AppProvider>
