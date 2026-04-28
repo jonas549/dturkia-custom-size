@@ -43,6 +43,7 @@
   {% endif %}
 
   <div class="csw-container" {% if csw_instant %}style="display:none"{% endif %}>
+    <p class="csw-modo-edicion-label">Editando medidas</p>
     <h3 class="csw-title">Medida Personalizada</h3>
 
     <div class="csw-slider-group">
@@ -91,12 +92,30 @@
     border: 1px solid var(--crema, #E3DECC);
     padding: 20px 24px;
     background: var(--back, #F8F7F4);
-    max-width: 480px;
+    width: 100%;
+    box-sizing: border-box;
+  }
+
+  .csw-modo-edicion-label {
+    display: none;
+    font-size: var(--f11, 0.6875em);
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    color: var(--dorado, #A59765);
+    margin: 0 0 12px;
+  }
+
+  .csw-container.csw-modo-edicion {
+    border-left: 3px solid var(--dorado, #A59765);
+  }
+
+  .csw-container.csw-modo-edicion .csw-modo-edicion-label {
+    display: block;
   }
 
   .csw-title {
     margin: 0 0 20px;
-    font-family: var(--font, 'Poppins', sans-serif);
     font-size: var(--f16, 1em);
     font-weight: 600;
     color: var(--color, #232930);
@@ -217,7 +236,6 @@
     background: var(--negro, #000000);
     color: var(--blanco, #ffffff);
     border: none;
-    font-family: var(--font, 'Poppins', sans-serif);
     font-size: var(--f13, 0.8125em);
     font-weight: 600;
     text-align: center;
@@ -295,12 +313,22 @@
     var root = document.getElementById('csw-root');
     if (!root) return;
 
-    var shop      = root.dataset.shop;
-    var productId = root.dataset.productId;
+    var shop          = root.dataset.shop;
+    var productId     = root.dataset.productId;
     if (!shop) return;
 
+    // Modo edición: detectar parámetros en URL
+    var urlParams     = new URLSearchParams(window.location.search);
+    var editId        = urlParams.get('csw_edit') || '';
+    var editAncho     = editId ? parseInt(urlParams.get('ancho') || '0', 10) : 0;
+    var editAlto      = editId ? parseInt(urlParams.get('alto')  || '0', 10) : 0;
+    var editWp        = editId ? urlParams.get('waterproof') === '1' : false;
+    var enModoEdicion = !!editId;
+
     // Timeout de seguridad: si la API no responde en 8s, restaurar nativos
+    var safetyFired = false;
     var safetyTimer = setTimeout(function() {
+      safetyFired = true;
       root.style.display = 'none';
       mostrarNativos();
     }, 8000);
@@ -348,8 +376,23 @@
         eid('csw-alto-min').textContent  = regla.minAlto  + ' cm';
         eid('csw-alto-max').textContent  = regla.maxAlto  + ' cm';
 
+        // Modo edición: precargar sliders con valores del URL
+        if (enModoEdicion) {
+          if (editAncho >= parseInt(regla.minAncho) && editAncho <= parseInt(regla.maxAncho)) {
+            sAncho.value = editAncho;
+            eid('csw-ancho-val').textContent = editAncho;
+          }
+          if (editAlto >= parseInt(regla.minAlto) && editAlto <= parseInt(regla.maxAlto)) {
+            sAlto.value = editAlto;
+            eid('csw-alto-val').textContent = editAlto;
+          }
+        }
+
         if (waterproofActivo) {
           eid('csw-waterproof-section').style.display = '';
+          if (enModoEdicion && editWp && eid('csw-waterproof')) {
+            eid('csw-waterproof').checked = true;
+          }
         }
 
         calcular(precioPorM2, waterproofPorM2, waterproofActivo);
@@ -360,6 +403,12 @@
         if (loadingEl)   loadingEl.style.display   = 'none';
         if (containerEl) containerEl.style.display = '';
         root.style.display = '';
+
+        // Modo edición: indicador visual + texto del botón
+        if (enModoEdicion) {
+          eid('csw-agregar').textContent = 'Actualizar medidas';
+          if (containerEl) containerEl.classList.add('csw-modo-edicion');
+        }
 
         // Eventos sliders
         sAncho.addEventListener('input', function () {
@@ -376,7 +425,7 @@
           });
         }
 
-        // Botón "Agregar a la bolsa"
+        // Botón "Agregar a la bolsa" / "Actualizar medidas"
         eid('csw-agregar').addEventListener('click', function () {
           mostrarError('');
 
@@ -387,22 +436,6 @@
 
           var precioAlfombra = Math.round(m2 * precioPorM2);
           var precioWp       = Math.round(m2 * waterproofPorM2);
-          var itemId         = shop + '_' + (root.dataset.variantId || '') + '_' + Date.now();
-
-          var nuevoItem = {
-            id:               itemId,
-            shop:             shop,
-            ancho:            anchoN,
-            alto:             altoN,
-            waterproof:       !!wpChecked,
-            precio:           precioAlfombra,
-            waterproofPrecio: precioWp,
-            variantId:        root.dataset.variantId || '',
-            imageUrl:         root.dataset.imageUrl  || '',
-            productTitle:     (document.querySelector('.product h1') || {}).textContent || '',
-            productHandle:    root.dataset.productHandle || '',
-            createdAt:        Date.now()
-          };
 
           try {
             var arr = [];
@@ -421,11 +454,59 @@
               }
               localStorage.removeItem('csw_pending_order');
             }
-            arr.push(nuevoItem);
+
+            if (enModoEdicion && editId) {
+              // Reemplazar item existente — preservar campos no editables
+              var reemplazado = false;
+              arr = arr.map(function(existing) {
+                if (existing.id !== editId) return existing;
+                reemplazado = true;
+                return {
+                  id:               editId,
+                  shop:             existing.shop            || shop,
+                  ancho:            anchoN,
+                  alto:             altoN,
+                  waterproof:       !!wpChecked,
+                  precio:           precioAlfombra,
+                  waterproofPrecio: precioWp,
+                  variantId:        existing.variantId       || root.dataset.variantId    || '',
+                  imageUrl:         existing.imageUrl        || root.dataset.imageUrl     || '',
+                  productTitle:     existing.productTitle    || (document.querySelector('.product h1') || {}).textContent || '',
+                  productHandle:    existing.productHandle   || root.dataset.productHandle || '',
+                  createdAt:        existing.createdAt       || Date.now()
+                };
+              });
+              if (!reemplazado) {
+                arr.push({
+                  id: editId, shop: shop, ancho: anchoN, alto: altoN,
+                  waterproof: !!wpChecked, precio: precioAlfombra, waterproofPrecio: precioWp,
+                  variantId: root.dataset.variantId || '', imageUrl: root.dataset.imageUrl || '',
+                  productTitle: (document.querySelector('.product h1') || {}).textContent || '',
+                  productHandle: root.dataset.productHandle || '', createdAt: Date.now()
+                });
+              }
+            } else {
+              var itemId = shop + '_' + (root.dataset.variantId || '') + '_' + Date.now();
+              arr.push({
+                id: itemId, shop: shop, ancho: anchoN, alto: altoN,
+                waterproof: !!wpChecked, precio: precioAlfombra, waterproofPrecio: precioWp,
+                variantId: root.dataset.variantId || '', imageUrl: root.dataset.imageUrl || '',
+                productTitle: (document.querySelector('.product h1') || {}).textContent || '',
+                productHandle: root.dataset.productHandle || '', createdAt: Date.now()
+              });
+            }
             localStorage.setItem('csw_pending_orders', JSON.stringify(arr));
           } catch (e) {
             mostrarError('Error al guardar el pedido. Por favor intenta nuevamente.');
             return;
+          }
+
+          // En modo edición: limpiar URL y resetear UI
+          if (enModoEdicion) {
+            history.replaceState({}, '', window.location.pathname);
+            eid('csw-agregar').textContent = 'Agregar a la bolsa';
+            if (containerEl) containerEl.classList.remove('csw-modo-edicion');
+            enModoEdicion = false;
           }
 
           if (typeof update_mini_cart === 'function') {
