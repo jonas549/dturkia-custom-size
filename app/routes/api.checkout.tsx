@@ -38,14 +38,26 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     });
   }
 
+  type CustomItemInput = {
+    ancho: number;
+    alto: number;
+    waterproof?: boolean;
+    precio?: number;
+    waterproofPrecio?: number;
+    variantId?: number | string | null;
+    productTitle?: string | null;
+  };
+
   let body: {
     shop?: string;
+    customItems?: CustomItemInput[];
+    cartItems?: Array<{ variant_id: number; quantity: number }>;
+    // Legacy single-item fields (backward compat para browsers con JS cacheado)
     ancho?: number;
     alto?: number;
     waterproof?: boolean;
     precio?: number;
     waterproofPrecio?: number;
-    cartItems?: Array<{ variant_id: number; quantity: number }>;
     variantId?: number | string;
     productTitle?: string;
   };
@@ -59,16 +71,37 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     });
   }
 
-  const { shop, ancho, alto, waterproof, precio, waterproofPrecio, cartItems, variantId, productTitle } = body;
+  const { shop, cartItems } = body;
 
-  if (!shop || !ancho || !alto || precio === undefined) {
+  // Normalizar: nuevo formato (customItems array) o legacy (campos planos)
+  let customItems: CustomItemInput[];
+  if (Array.isArray(body.customItems) && body.customItems.length) {
+    customItems = body.customItems;
+  } else if (body.ancho && body.alto && body.precio !== undefined) {
+    customItems = [{
+      ancho: body.ancho,
+      alto: body.alto,
+      waterproof: body.waterproof,
+      precio: body.precio,
+      waterproofPrecio: body.waterproofPrecio,
+      variantId: body.variantId,
+      productTitle: body.productTitle,
+    }];
+  } else {
     return new Response(
-      JSON.stringify({ error: "Parámetros requeridos: shop, ancho, alto, precio" }),
+      JSON.stringify({ error: "Parámetros requeridos: shop + customItems (o ancho/alto/precio en formato legacy)" }),
       { status: 400, headers: corsHeaders },
     );
   }
 
-  console.log("[api.checkout] Request:", { shop, ancho, alto, waterproof, precio, waterproofPrecio });
+  if (!shop || !customItems.every(i => i.ancho && i.alto && i.precio !== undefined)) {
+    return new Response(
+      JSON.stringify({ error: "Cada item requiere: ancho, alto, precio" }),
+      { status: 400, headers: corsHeaders },
+    );
+  }
+
+  console.log("[api.checkout] Request:", { shop, itemCount: customItems.length });
 
   const sql = neon(process.env.DIRECT_URL ?? process.env.DATABASE_URL!);
 
@@ -106,30 +139,29 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 
   console.log("[api.checkout] Usando sesión id:", session.id, "scope:", session.scope);
 
-  const precioTotal = (precio || 0) + (waterproof && waterproofPrecio ? waterproofPrecio : 0);
-
-  const properties = [
-    { name: "Ancho", value: `${ancho} cm` },
-    { name: "Alto", value: `${alto} cm` },
-    { name: "Impermeabilizador", value: waterproof ? "Sí" : "No" },
-  ];
-
   const regularItems = (cartItems || []).map((item) => ({
     variant_id: item.variant_id,
     quantity: item.quantity,
   }));
 
-  const baseTitle = productTitle || "Alfombra Medida Personalizada";
-  const customItem = {
-    title: `${baseTitle} — ${ancho}cm × ${alto}cm`,
-    quantity: 1,
-    price: precioTotal.toFixed(2),
-    properties,
-  };
+  const customLineItems = customItems.map((item) => {
+    const itemPrecio = (item.precio || 0) + (item.waterproof && item.waterproofPrecio ? item.waterproofPrecio : 0);
+    const baseTitle  = item.productTitle || "Alfombra Medida Personalizada";
+    return {
+      title:    `${baseTitle} — ${item.ancho}cm × ${item.alto}cm`,
+      quantity: 1,
+      price:    itemPrecio.toFixed(2),
+      properties: [
+        { name: "Ancho",             value: `${item.ancho} cm` },
+        { name: "Alto",              value: `${item.alto} cm` },
+        { name: "Impermeabilizador", value: item.waterproof ? "Sí" : "No" },
+      ],
+    };
+  });
 
   const draftOrderPayload = {
     draft_order: {
-      line_items: [...regularItems, customItem],
+      line_items: [...regularItems, ...customLineItems],
     },
   };
 
@@ -145,7 +177,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     );
   }
 
-  console.log("[api.checkout] Creando draft order para shop:", shop, "precio:", precioTotal);
+  console.log("[api.checkout] Creando draft order para shop:", shop, "custom items:", customItems.length);
 
   const shopifyResponse = await fetch(
     `https://${shop}/admin/api/2025-10/draft_orders.json`,
@@ -177,27 +209,30 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 
   console.log("[api.checkout] Draft order creado. ID:", draftOrderId, "URL:", checkoutUrl);
 
-  // Registrar PedidoCustom en DB — no bloquea el checkout si falla
-  try {
-    await sql`
-      INSERT INTO "PedidoCustom" (id, shop, "orderId", ancho, alto, waterproof, "precioTotal", estado, "productTitle", "createdAt")
-      VALUES (
-        ${randomUUID()},
-        ${shop},
-        ${draftOrderId},
-        ${ancho},
-        ${alto},
-        ${waterproof ?? false},
-        ${precioTotal},
-        'pendiente',
-        ${productTitle ?? ""},
-        NOW()
-      )
-    `;
-    console.log("[api.checkout] PedidoCustom registrado. orderId:", draftOrderId);
-  } catch (insertErr) {
-    console.error("[api.checkout] Error registrando PedidoCustom:", insertErr);
+  // Registrar un PedidoCustom por cada item — no bloquea el checkout si falla
+  for (const item of customItems) {
+    const itemPrecio = (item.precio || 0) + (item.waterproof && item.waterproofPrecio ? item.waterproofPrecio : 0);
+    try {
+      await sql`
+        INSERT INTO "PedidoCustom" (id, shop, "orderId", ancho, alto, waterproof, "precioTotal", estado, "productTitle", "createdAt")
+        VALUES (
+          ${randomUUID()},
+          ${shop},
+          ${draftOrderId},
+          ${item.ancho},
+          ${item.alto},
+          ${item.waterproof ?? false},
+          ${itemPrecio},
+          'pendiente',
+          ${item.productTitle ?? ""},
+          NOW()
+        )
+      `;
+    } catch (insertErr) {
+      console.error("[api.checkout] Error registrando PedidoCustom:", insertErr);
+    }
   }
+  console.log("[api.checkout] PedidoCustom registrados:", customItems.length, "orderId:", draftOrderId);
 
   return new Response(
     JSON.stringify({ checkoutUrl, draftOrderId }),

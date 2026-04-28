@@ -9,7 +9,8 @@
 
 {%- assign csw_instant = false -%}
 {%- for _t in product.tags -%}
-  {%- if _t | downcase == 'medida-personalizada' -%}
+  {%- assign _t_lower = _t | downcase -%}
+  {%- if _t_lower == 'medida-personalizada' -%}
     {%- assign csw_instant = true -%}
   {%- endif -%}
 {%- endfor -%}
@@ -30,6 +31,7 @@
      data-product-id="{{ csw_product }}"
      data-variant-id="{{ product.selected_or_first_available_variant.id }}"
      data-image-url="{{ product.featured_image | image_url: width: 400 }}"
+     data-product-handle="{{ product.handle }}"
      {% unless csw_instant %}style="display:none"{% endunless %}>
 
   {% if csw_instant %}
@@ -313,6 +315,7 @@
       .then(function (r) { return r.ok ? r.json() : null; })
       .then(function (data) {
         clearTimeout(safetyTimer);
+        if (safetyFired) return;
 
         var loadingEl   = eid('csw-loading');
         var containerEl = root.querySelector('.csw-container');
@@ -351,11 +354,12 @@
 
         calcular(precioPorM2, waterproofPorM2, waterproofActivo);
 
+        // Ocultar nativos (tanto si server-side no los ocultó como si sí)
+        document.documentElement.classList.add('csw-natives-hidden');
         // Transición loading → widget
         if (loadingEl)   loadingEl.style.display   = 'none';
         if (containerEl) containerEl.style.display = '';
         root.style.display = '';
-        // Los nativos quedan ocultos por la clase .csw-natives-hidden (CSS server-side)
 
         // Eventos sliders
         sAncho.addEventListener('input', function () {
@@ -383,20 +387,42 @@
 
           var precioAlfombra = Math.round(m2 * precioPorM2);
           var precioWp       = Math.round(m2 * waterproofPorM2);
+          var itemId         = shop + '_' + (root.dataset.variantId || '') + '_' + Date.now();
+
+          var nuevoItem = {
+            id:               itemId,
+            shop:             shop,
+            ancho:            anchoN,
+            alto:             altoN,
+            waterproof:       !!wpChecked,
+            precio:           precioAlfombra,
+            waterproofPrecio: precioWp,
+            variantId:        root.dataset.variantId || '',
+            imageUrl:         root.dataset.imageUrl  || '',
+            productTitle:     (document.querySelector('.product h1') || {}).textContent || '',
+            productHandle:    root.dataset.productHandle || '',
+            createdAt:        Date.now()
+          };
 
           try {
-            localStorage.setItem('csw_pending_order', JSON.stringify({
-              shop:             shop,
-              ancho:            anchoN,
-              alto:             altoN,
-              waterproof:       !!wpChecked,
-              precio:           precioAlfombra,
-              waterproofPrecio: precioWp,
-              variantId:        root.dataset.variantId || '',
-              imageUrl:         root.dataset.imageUrl  || '',
-              productTitle:     (document.querySelector('.product h1') || {}).textContent || '',
-              createdAt:        Date.now()
-            }));
+            var arr = [];
+            var rawArr = localStorage.getItem('csw_pending_orders');
+            if (rawArr) {
+              var parsedArr = JSON.parse(rawArr);
+              if (Array.isArray(parsedArr)) arr = parsedArr;
+            }
+            // Migration: formato viejo (objeto único) → array
+            var rawViejo = localStorage.getItem('csw_pending_order');
+            if (rawViejo) {
+              var viejo = JSON.parse(rawViejo);
+              if (viejo && typeof viejo === 'object' && !Array.isArray(viejo)) {
+                viejo.id = viejo.id || ('legacy_' + Date.now());
+                arr = [viejo].concat(arr);
+              }
+              localStorage.removeItem('csw_pending_order');
+            }
+            arr.push(nuevoItem);
+            localStorage.setItem('csw_pending_orders', JSON.stringify(arr));
           } catch (e) {
             mostrarError('Error al guardar el pedido. Por favor intenta nuevamente.');
             return;
