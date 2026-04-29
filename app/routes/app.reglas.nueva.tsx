@@ -16,7 +16,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 };
 
 export const action = async ({ request }: ActionFunctionArgs) => {
-  const { session } = await authenticate.admin(request);
+  const { session, admin } = await authenticate.admin(request);
   const fd = await request.formData();
 
   const nombre = String(fd.get("nombre") ?? "").trim();
@@ -29,21 +29,52 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     productIds = [];
   }
 
+  const minAncho    = Number(fd.get("minAncho"));
+  const minAlto     = Number(fd.get("minAlto"));
+  const precioPorM2 = Number(fd.get("precioPorM2"));
+
   await prisma.reglaPersonalizada.create({
     data: {
       shop: session.shop,
       nombre,
-      minAncho: Number(fd.get("minAncho")),
+      minAncho,
       maxAncho: Number(fd.get("maxAncho")),
-      minAlto: Number(fd.get("minAlto")),
+      minAlto,
       maxAlto: Number(fd.get("maxAlto")),
-      precioPorM2: Number(fd.get("precioPorM2")),
+      precioPorM2,
       waterproofActivo: fd.get("waterproofActivo") === "on",
       waterproofPorM2: Number(fd.get("waterproofPorM2") ?? 0),
       activa: fd.get("activa") === "on",
       productIds,
     },
   });
+
+  if (productIds.length > 0) {
+    try {
+      const precioDesde     = Math.ceil(minAncho / 100) * Math.ceil(minAlto / 100) * precioPorM2;
+      const shopifyValue    = String(Math.round(precioDesde * 100));
+      await admin.graphql(
+        `#graphql
+        mutation metafieldsSet($metafields: [MetafieldsSetInput!]!) {
+          metafieldsSet(metafields: $metafields) {
+            metafields { id }
+            userErrors { field message }
+          }
+        }`,
+        {
+          variables: {
+            metafields: productIds.slice(0, 25).map((pid) => ({
+              ownerId:   pid.startsWith("gid://") ? pid : `gid://shopify/Product/${pid}`,
+              namespace: "dturkia",
+              key:       "precio_desde",
+              value:     shopifyValue,
+              type:      "number_integer",
+            })),
+          },
+        },
+      );
+    } catch { /* metafield non-critical */ }
+  }
 
   return redirect("/app/reglas");
 };

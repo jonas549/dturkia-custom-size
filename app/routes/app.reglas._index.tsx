@@ -1,5 +1,5 @@
-import type { LoaderFunctionArgs, HeadersFunction } from "react-router";
-import { useLoaderData } from "react-router";
+import type { LoaderFunctionArgs, ActionFunctionArgs, HeadersFunction } from "react-router";
+import { Form, useActionData, useLoaderData, useNavigation } from "react-router";
 import { authenticate } from "../shopify.server";
 import { boundary } from "@shopify/shopify-app-react-router/server";
 import prisma from "../db.server";
@@ -13,6 +13,64 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   return { reglas };
 };
 
+export const action = async ({ request }: ActionFunctionArgs) => {
+  const { session, admin } = await authenticate.admin(request);
+  const fd = await request.formData();
+
+  if (fd.get("_action") !== "sincronizar") return null;
+
+  const reglas = await prisma.reglaPersonalizada.findMany({
+    where: { shop: session.shop },
+    select: { productIds: true, minAncho: true, minAlto: true, precioPorM2: true, activa: true },
+  });
+
+  type MetafieldInput = { ownerId: string; value: string };
+  const updates: MetafieldInput[] = [];
+
+  for (const regla of reglas) {
+    if (regla.productIds.length === 0) continue;
+    const value = regla.activa
+      ? String(Math.round(Math.ceil(regla.minAncho / 100) * Math.ceil(regla.minAlto / 100) * regla.precioPorM2 * 100))
+      : "0";
+    for (const pid of regla.productIds) {
+      updates.push({
+        ownerId: pid.startsWith("gid://") ? pid : `gid://shopify/Product/${pid}`,
+        value,
+      });
+    }
+  }
+
+  if (updates.length === 0) return { sincronizados: 0 };
+
+  for (let i = 0; i < updates.length; i += 25) {
+    const chunk = updates.slice(i, i + 25);
+    try {
+      await admin.graphql(
+        `#graphql
+        mutation metafieldsSet($metafields: [MetafieldsSetInput!]!) {
+          metafieldsSet(metafields: $metafields) {
+            metafields { id }
+            userErrors { field message }
+          }
+        }`,
+        {
+          variables: {
+            metafields: chunk.map((u) => ({
+              ownerId:   u.ownerId,
+              namespace: "dturkia",
+              key:       "precio_desde",
+              value:     u.value,
+              type:      "number_integer",
+            })),
+          },
+        },
+      );
+    } catch { /* continue on error */ }
+  }
+
+  return { sincronizados: updates.length };
+};
+
 const tdStyle = { padding: "12px 16px", verticalAlign: "middle" } as const;
 const thStyle = {
   ...tdStyle,
@@ -24,7 +82,12 @@ const thStyle = {
 } as const;
 
 export default function ReglasList() {
-  const { reglas } = useLoaderData<typeof loader>();
+  const { reglas }    = useLoaderData<typeof loader>();
+  const actionData    = useActionData<typeof action>();
+  const navigation    = useNavigation();
+  const isSincronizando =
+    navigation.state === "submitting" &&
+    navigation.formData?.get("_action") === "sincronizar";
 
   return (
     <s-page heading="Reglas de medidas">
@@ -46,7 +109,7 @@ export default function ReglasList() {
                   <th style={thStyle}>Nombre</th>
                   <th style={thStyle}>Ancho (min–max cm)</th>
                   <th style={thStyle}>Alto (min–max cm)</th>
-                  <th style={thStyle}>Precio/cm²</th>
+                  <th style={thStyle}>Precio/m²</th>
                   <th style={thStyle}>Impermeabilizador</th>
                   <th style={thStyle}>Estado</th>
                   <th style={thStyle}></th>
@@ -68,10 +131,10 @@ export default function ReglasList() {
                     <td style={tdStyle}>
                       {regla.minAlto}–{regla.maxAlto}
                     </td>
-                    <td style={tdStyle}>${regla.precioPorCm2}/cm²</td>
+                    <td style={tdStyle}>${regla.precioPorM2.toLocaleString("es-CL")}/m²</td>
                     <td style={tdStyle}>
                       {regla.waterproofActivo
-                        ? `$${regla.waterproofPorCm2}/cm²`
+                        ? `$${regla.waterproofPorM2.toLocaleString("es-CL")}/m²`
                         : "No"}
                     </td>
                     <td style={tdStyle}>
@@ -98,6 +161,86 @@ export default function ReglasList() {
             </table>
           </div>
         )}
+      </s-section>
+
+      <s-section>
+        <div style={{ borderTop: "1px solid #e1e3e5", paddingTop: 20 }}>
+          <p style={{ fontSize: 13, color: "#6d7175", marginBottom: 12 }}>
+            Sincroniza el precio mínimo de cada regla como metafield en Shopify para que las
+            tarjetas de colección muestren &quot;Desde $X — a medida&quot; en lugar de
+            &quot;Precio personalizado&quot;. Ejecuta este botón al instalar la app por primera
+            vez o después de modificar reglas existentes.
+          </p>
+
+          {isSincronizando && (
+            <div style={{ marginBottom: 12 }}>
+              <style>{`
+                @keyframes csw-sync-fill {
+                  from { width: 0% }
+                  to   { width: 88% }
+                }
+                .csw-sync-bar {
+                  height: 8px;
+                  background: #e4e5e7;
+                  border-radius: 4px;
+                  overflow: hidden;
+                  width: 100%;
+                  max-width: 400px;
+                }
+                .csw-sync-bar-fill {
+                  height: 100%;
+                  background: #008060;
+                  border-radius: 4px;
+                  animation: csw-sync-fill 3s ease-out forwards;
+                }
+              `}</style>
+              <p style={{ fontSize: 13, color: "#6d7175", marginBottom: 6 }}>
+                Sincronizando metafields…
+              </p>
+              <div className="csw-sync-bar">
+                <div className="csw-sync-bar-fill" />
+              </div>
+            </div>
+          )}
+
+          {actionData && "sincronizados" in actionData && !isSincronizando && (
+            <div
+              style={{
+                background: "#d4edda",
+                color: "#155724",
+                border: "1px solid #c3e6cb",
+                borderRadius: 6,
+                padding: "8px 14px",
+                fontSize: 13,
+                marginBottom: 12,
+              }}
+            >
+              ✓ {actionData.sincronizados} producto
+              {actionData.sincronizados !== 1 ? "s" : ""} sincronizado
+              {actionData.sincronizados !== 1 ? "s" : ""} correctamente.
+            </div>
+          )}
+
+          <Form method="post">
+            <input type="hidden" name="_action" value="sincronizar" />
+            <button
+              type="submit"
+              disabled={isSincronizando}
+              style={{
+                background: isSincronizando ? "#e4e5e7" : "#f1f8ff",
+                color: isSincronizando ? "#8c9196" : "#0070c4",
+                border: `1px solid ${isSincronizando ? "#c9cccf" : "#0070c4"}`,
+                borderRadius: 6,
+                padding: "8px 16px",
+                fontSize: 13,
+                fontWeight: 600,
+                cursor: isSincronizando ? "not-allowed" : "pointer",
+              }}
+            >
+              {isSincronizando ? "Sincronizando…" : "Sincronizar precios de tarjetas"}
+            </button>
+          </Form>
+        </div>
       </s-section>
     </s-page>
   );

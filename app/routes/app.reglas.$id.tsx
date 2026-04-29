@@ -48,10 +48,38 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
 };
 
 export const action = async ({ request, params }: ActionFunctionArgs) => {
-  const { session } = await authenticate.admin(request);
+  const { session, admin } = await authenticate.admin(request);
   const fd = await request.formData();
 
   if (fd.get("_action") === "delete") {
+    const reglaToDelete = await prisma.reglaPersonalizada.findFirst({
+      where: { id: params.id, shop: session.shop },
+      select: { productIds: true },
+    });
+    if (reglaToDelete && reglaToDelete.productIds.length > 0) {
+      try {
+        await admin.graphql(
+          `#graphql
+          mutation metafieldsSet($metafields: [MetafieldsSetInput!]!) {
+            metafieldsSet(metafields: $metafields) {
+              metafields { id }
+              userErrors { field message }
+            }
+          }`,
+          {
+            variables: {
+              metafields: reglaToDelete.productIds.slice(0, 25).map((pid) => ({
+                ownerId:   pid.startsWith("gid://") ? pid : `gid://shopify/Product/${pid}`,
+                namespace: "dturkia",
+                key:       "precio_desde",
+                value:     "0",
+                type:      "number_integer",
+              })),
+            },
+          },
+        );
+      } catch { /* metafield non-critical */ }
+    }
     await prisma.reglaPersonalizada.deleteMany({
       where: { id: params.id, shop: session.shop },
     });
@@ -68,21 +96,83 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
     productIds = [];
   }
 
+  const minAncho    = Number(fd.get("minAncho"));
+  const minAlto     = Number(fd.get("minAlto"));
+  const precioPorM2 = Number(fd.get("precioPorM2"));
+
+  const oldRegla = await prisma.reglaPersonalizada.findFirst({
+    where: { id: params.id, shop: session.shop },
+    select: { productIds: true },
+  });
+  const removedProductIds = (oldRegla?.productIds ?? []).filter((id) => !productIds.includes(id));
+
   await prisma.reglaPersonalizada.updateMany({
     where: { id: params.id, shop: session.shop },
     data: {
       nombre,
-      minAncho: Number(fd.get("minAncho")),
+      minAncho,
       maxAncho: Number(fd.get("maxAncho")),
-      minAlto: Number(fd.get("minAlto")),
+      minAlto,
       maxAlto: Number(fd.get("maxAlto")),
-      precioPorM2: Number(fd.get("precioPorM2")),
+      precioPorM2,
       waterproofActivo: fd.get("waterproofActivo") === "on",
       waterproofPorM2: Number(fd.get("waterproofPorM2") ?? 0),
       activa: fd.get("activa") === "on",
       productIds,
     },
   });
+
+  if (productIds.length > 0) {
+    try {
+      const precioDesde  = Math.ceil(minAncho / 100) * Math.ceil(minAlto / 100) * precioPorM2;
+      const shopifyValue = String(Math.round(precioDesde * 100));
+      await admin.graphql(
+        `#graphql
+        mutation metafieldsSet($metafields: [MetafieldsSetInput!]!) {
+          metafieldsSet(metafields: $metafields) {
+            metafields { id }
+            userErrors { field message }
+          }
+        }`,
+        {
+          variables: {
+            metafields: productIds.slice(0, 25).map((pid) => ({
+              ownerId:   pid.startsWith("gid://") ? pid : `gid://shopify/Product/${pid}`,
+              namespace: "dturkia",
+              key:       "precio_desde",
+              value:     shopifyValue,
+              type:      "number_integer",
+            })),
+          },
+        },
+      );
+    } catch { /* metafield non-critical */ }
+  }
+
+  if (removedProductIds.length > 0) {
+    try {
+      await admin.graphql(
+        `#graphql
+        mutation metafieldsSet($metafields: [MetafieldsSetInput!]!) {
+          metafieldsSet(metafields: $metafields) {
+            metafields { id }
+            userErrors { field message }
+          }
+        }`,
+        {
+          variables: {
+            metafields: removedProductIds.slice(0, 25).map((pid) => ({
+              ownerId:   pid.startsWith("gid://") ? pid : `gid://shopify/Product/${pid}`,
+              namespace: "dturkia",
+              key:       "precio_desde",
+              value:     "0",
+              type:      "number_integer",
+            })),
+          },
+        },
+      );
+    } catch { /* metafield non-critical */ }
+  }
 
   return redirect("/app/reglas");
 };
