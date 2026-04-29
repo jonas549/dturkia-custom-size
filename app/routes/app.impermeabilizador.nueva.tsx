@@ -1,14 +1,29 @@
 import { useState } from "react";
 import type { ActionFunctionArgs, LoaderFunctionArgs, HeadersFunction } from "react-router";
-import { Form, redirect, useActionData, useNavigation } from "react-router";
+import { Form, redirect, useActionData, useLoaderData, useNavigation } from "react-router";
 import { useAppBridge } from "@shopify/app-bridge-react";
 import { authenticate } from "../shopify.server";
 import { boundary } from "@shopify/shopify-app-react-router/server";
 import prisma from "../db.server";
 
+// Fórmula compartida servidor + cliente
+function calcularPrecioImp(variantTitle: string, costoPorM2: number): number {
+  const match = variantTitle.match(
+    /(\d+(?:[.,]\d+)?)\s*(?:cm)?\s*[xX×]\s*(\d+(?:[.,]\d+)?)\s*(?:cm)?/i,
+  );
+  if (!match) return 0;
+  const anchoCm = parseFloat(match[1].replace(",", "."));
+  const altoCm  = parseFloat(match[2].replace(",", "."));
+  if (!anchoCm || !altoCm) return 0;
+  return Math.ceil(anchoCm / 100) * Math.ceil(altoCm / 100) * costoPorM2;
+}
+
 export const loader = async ({ request }: LoaderFunctionArgs) => {
-  await authenticate.admin(request);
-  return null;
+  const { session } = await authenticate.admin(request);
+  const config = await prisma.configuracionImpermeabilizador.findUnique({
+    where: { shop: session.shop },
+  });
+  return { costoPorM2: config?.costoPorM2 ?? 13100 };
 };
 
 export const action = async ({ request }: ActionFunctionArgs) => {
@@ -16,8 +31,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   const fd = await request.formData();
 
   const productIdRaw = String(fd.get("productId") ?? "").trim();
-  // Aceptar GID (gid://shopify/Product/X) o ID numérico directo
-  const productId = productIdRaw.replace("gid://shopify/Product/", "");
+  const productId    = productIdRaw.replace("gid://shopify/Product/", "");
   if (!productId) return { error: "Selecciona un producto." };
 
   const productTitle = String(fd.get("productTitle") ?? "").trim();
@@ -37,7 +51,6 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     };
   }
 
-  // Verificar que no exista ya una regla de impermeabilizador para este producto
   const impExistente = await prisma.reglaImpermeabilizador.findFirst({
     where: { shop: session.shop, productId },
   });
@@ -78,7 +91,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 };
 
 // ── Estilos ──────────────────────────────────────────────────────────────────
-const field: React.CSSProperties    = { marginBottom: 16 };
+const field: React.CSSProperties      = { marginBottom: 16 };
 const labelStyle: React.CSSProperties = { display: "block", fontSize: 13, fontWeight: 600, marginBottom: 4, color: "#202223" };
 const inputStyle: React.CSSProperties = { width: "100%", padding: "8px 12px", border: "1px solid #8c9196", borderRadius: 6, fontSize: 14, boxSizing: "border-box" };
 const checkRow: React.CSSProperties   = { display: "flex", alignItems: "center", gap: 8, marginBottom: 16 };
@@ -88,33 +101,20 @@ const pickerBtn: React.CSSProperties  = { background: "#f1f8ff", color: "#0070c4
 const thTd: React.CSSProperties       = { padding: "10px 12px", textAlign: "left", fontSize: 13, borderBottom: "1px solid #e1e3e5" };
 // ─────────────────────────────────────────────────────────────────────────────
 
-const PRECIO_IMP_POR_M2 = 13100;
-
-function sugerirPrecio(variantTitle: string): number {
-  const match = variantTitle.match(
-    /(\d+(?:[.,]\d+)?)\s*(?:cm)?\s*[xX×]\s*(\d+(?:[.,]\d+)?)\s*(?:cm)?/i,
-  );
-  if (!match) return 0;
-  const anchoCm = parseFloat(match[1].replace(",", "."));
-  const altoCm  = parseFloat(match[2].replace(",", "."));
-  if (!anchoCm || !altoCm) return 0;
-  const m2 = Math.ceil(anchoCm / 100) * Math.ceil(altoCm / 100);
-  return m2 * PRECIO_IMP_POR_M2;
-}
-
 type VariantRow = {
-  id: string;         // GID
-  title: string;
-  aplica: boolean;
-  precio: number;
+  id:           string;
+  title:        string;
+  aplica:       boolean;
+  precio:       number;
   precioManual: boolean;
 };
 
 export default function NuevaReglaImp() {
-  const actionData = useActionData<typeof action>();
-  const navigation = useNavigation();
-  const saving     = navigation.state === "submitting";
-  const shopify    = useAppBridge();
+  const { costoPorM2 } = useLoaderData<typeof loader>();
+  const actionData     = useActionData<typeof action>();
+  const navigation     = useNavigation();
+  const saving         = navigation.state === "submitting";
+  const shopify        = useAppBridge();
 
   const [producto,  setProducto]  = useState<{ id: string; title: string } | null>(null);
   const [variantes, setVariantes] = useState<VariantRow[]>([]);
@@ -130,16 +130,13 @@ export default function NuevaReglaImp() {
     const p = seleccion[0];
     setProducto({ id: p.id, title: p.title });
 
-    const rows: VariantRow[] = (p.variants || []).map((v: any) => {
-      const suggested = sugerirPrecio(v.title || "");
-      return {
-        id:           v.id,
-        title:        v.title || "Sin nombre",
-        aplica:       true,
-        precio:       suggested,
-        precioManual: false,
-      };
-    });
+    const rows: VariantRow[] = (p.variants || []).map((v: any) => ({
+      id:           v.id,
+      title:        v.title || "Sin nombre",
+      aplica:       true,
+      precio:       calcularPrecioImp(v.title || "", costoPorM2),
+      precioManual: false,
+    }));
     setVariantes(rows);
   };
 
@@ -151,7 +148,7 @@ export default function NuevaReglaImp() {
         return {
           ...v,
           aplica: newAplica,
-          precio: newAplica && !v.precioManual ? sugerirPrecio(v.title) : v.precio,
+          precio: newAplica && !v.precioManual ? calcularPrecioImp(v.title, costoPorM2) : v.precio,
         };
       }),
     );
@@ -178,13 +175,8 @@ export default function NuevaReglaImp() {
         {actionData?.error && (
           <div
             style={{
-              background: "#fde8e8",
-              color: "#8f1c1c",
-              border: "1px solid #f6b0b0",
-              borderRadius: 6,
-              padding: "10px 14px",
-              marginBottom: 20,
-              fontSize: 14,
+              background: "#fde8e8", color: "#8f1c1c", border: "1px solid #f6b0b0",
+              borderRadius: 6, padding: "10px 14px", marginBottom: 20, fontSize: 14,
             }}
           >
             {actionData.error}
@@ -192,8 +184,8 @@ export default function NuevaReglaImp() {
         )}
 
         <Form method="post">
-          <input type="hidden" name="productId"    value={producto?.id    ?? ""} />
-          <input type="hidden" name="productTitle" value={producto?.title ?? ""} />
+          <input type="hidden" name="productId"     value={producto?.id    ?? ""} />
+          <input type="hidden" name="productTitle"  value={producto?.title ?? ""} />
           <input type="hidden" name="variantesData" value={JSON.stringify(variantesPayload)} />
 
           {/* Selector de producto */}
@@ -207,12 +199,8 @@ export default function NuevaReglaImp() {
             {producto && (
               <div
                 style={{
-                  padding: "10px 14px",
-                  background: "#f1f8ff",
-                  border: "1px solid #bcd6f0",
-                  borderRadius: 6,
-                  fontSize: 14,
-                  color: "#202223",
+                  padding: "10px 14px", background: "#f1f8ff",
+                  border: "1px solid #bcd6f0", borderRadius: 6, fontSize: 14, color: "#202223",
                 }}
               >
                 <strong>{producto.title}</strong>
@@ -230,7 +218,7 @@ export default function NuevaReglaImp() {
               <span style={labelStyle}>
                 Configuración por variante
                 <span style={{ fontWeight: 400, color: "#6d7175", marginLeft: 8 }}>
-                  (precio sugerido: m² × ${PRECIO_IMP_POR_M2.toLocaleString("es-CL")} CLP, editable)
+                  (precio sugerido: m² × ${costoPorM2.toLocaleString("es-CL")} CLP, editable)
                 </span>
               </span>
               <div style={{ overflowX: "auto", marginTop: 8 }}>
@@ -262,11 +250,7 @@ export default function NuevaReglaImp() {
                             value={v.aplica ? v.precio : ""}
                             onChange={(e) => setPrecio(idx, e.target.value)}
                             disabled={!v.aplica}
-                            style={{
-                              ...inputStyle,
-                              width: 160,
-                              opacity: v.aplica ? 1 : 0.4,
-                            }}
+                            style={{ ...inputStyle, width: 160, opacity: v.aplica ? 1 : 0.4 }}
                             placeholder={v.aplica ? "Precio CLP" : "—"}
                           />
                         </td>
@@ -299,9 +283,7 @@ export default function NuevaReglaImp() {
               {saving ? "Guardando…" : "Guardar regla"}
             </button>
             <a href="/app/impermeabilizador">
-              <button type="button" style={cancelBtn}>
-                Cancelar
-              </button>
+              <button type="button" style={cancelBtn}>Cancelar</button>
             </a>
           </div>
         </Form>

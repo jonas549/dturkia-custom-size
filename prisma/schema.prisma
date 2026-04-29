@@ -84,3 +84,10 @@ model VarianteImpermeabilizador {
 
   @@unique([reglaId, variantId])
 }
+
+model ConfiguracionImpermeabilizador {
+  id         String   @id @default(cuid())
+  shop       String   @unique
+  costoPorM2 Float    @default(13100)
+  updatedAt  DateTime @updatedAt
+}
