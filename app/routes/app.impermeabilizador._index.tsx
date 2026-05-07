@@ -13,7 +13,7 @@ function calcularPrecioImp(variantTitle: string, costoPorM2: number): number {
   const anchoCm = parseFloat(match[1].replace(",", "."));
   const altoCm  = parseFloat(match[2].replace(",", "."));
   if (!anchoCm || !altoCm) return 0;
-  return Math.ceil(anchoCm / 100) * Math.ceil(altoCm / 100) * costoPorM2;
+  return Math.floor((anchoCm / 100) * (altoCm / 100) * costoPorM2);
 }
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {

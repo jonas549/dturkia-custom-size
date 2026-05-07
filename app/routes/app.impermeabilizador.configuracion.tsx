@@ -48,19 +48,16 @@ export default function ConfiguracionImpermeabilizador() {
   const [alto,      setAlto]      = useState("");
   const [resultado, setResultado] = useState<{
     anchoN: number; altoN: number;
-    mAncho: number; mAlto: number;
-    m2: number; costo: number;
+    m2Real: number; costo: number;
   } | null>(null);
 
   const calcular = () => {
     const anchoN = parseFloat(ancho) || 0;
     const altoN  = parseFloat(alto)  || 0;
     if (!anchoN || !altoN) return;
-    const mAncho = Math.ceil(anchoN / 100);
-    const mAlto  = Math.ceil(altoN  / 100);
-    const m2     = mAncho * mAlto;
-    const costo  = m2 * costoPorM2Efectivo;
-    setResultado({ anchoN, altoN, mAncho, mAlto, m2, costo });
+    const m2Real = (anchoN / 100) * (altoN / 100);
+    const costo  = Math.floor(m2Real * costoPorM2Efectivo);
+    setResultado({ anchoN, altoN, m2Real, costo });
   };
 
   return (
@@ -151,12 +148,11 @@ export default function ConfiguracionImpermeabilizador() {
               Cálculo: {resultado.anchoN} cm × {resultado.altoN} cm
             </div>
             <div>
-              m² = ceil({resultado.anchoN} / 100) × ceil({resultado.altoN} / 100)
-              &nbsp;= {resultado.mAncho} × {resultado.mAlto}
-              &nbsp;= <strong>{resultado.m2} m²</strong>
+              m² = {(resultado.anchoN / 100).toFixed(2)} × {(resultado.altoN / 100).toFixed(2)}
+              &nbsp;= <strong>{resultado.m2Real.toFixed(2)} m²</strong>
             </div>
             <div>
-              Costo = {resultado.m2} × ${costoPorM2Efectivo.toLocaleString("es-CL")}
+              Costo = {resultado.m2Real.toFixed(2)} × ${costoPorM2Efectivo.toLocaleString("es-CL")}
               &nbsp;= <strong style={{ color: "#008060", fontSize: 16 }}>
                 ${resultado.costo.toLocaleString("es-CL")} CLP
               </strong>
