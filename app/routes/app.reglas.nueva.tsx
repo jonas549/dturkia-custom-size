@@ -33,6 +33,12 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   const minAlto     = Number(fd.get("minAlto"));
   const precioPorM2 = Number(fd.get("precioPorM2"));
 
+  let bordes: { imagenUrl: string; nombre: string; tipo: string }[] = [];
+  try {
+    const parsed = JSON.parse(String(fd.get("bordes") ?? "[]"));
+    if (Array.isArray(parsed)) bordes = parsed;
+  } catch { bordes = []; }
+
   await prisma.reglaPersonalizada.create({
     data: {
       shop: session.shop,
@@ -46,6 +52,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       waterproofPorM2: Number(fd.get("waterproofPorM2") ?? 0),
       activa: fd.get("activa") === "on",
       productIds,
+      bordes,
     },
   });
 
@@ -161,6 +168,8 @@ const tagRemove: React.CSSProperties = {
 // ────────────────────────────────────────────────────────────────────────────
 
 type Producto = { id: string; title: string };
+type BordeItem = { imagenUrl: string; nombre: string; tipo: string };
+const emptyBorde = (): BordeItem => ({ imagenUrl: "", nombre: "", tipo: "" });
 
 export default function NuevaRegla() {
   const actionData = useActionData<typeof action>();
@@ -171,6 +180,11 @@ export default function NuevaRegla() {
   const [waterproofActivo, setWaterproofActivo] = useState(true);
   const [activa, setActiva] = useState(true);
   const [productos, setProductos] = useState<Producto[]>([]);
+  const [bordes, setBordes] = useState<BordeItem[]>([emptyBorde(), emptyBorde(), emptyBorde(), emptyBorde()]);
+
+  const actualizarBorde = (idx: number, field: keyof BordeItem, value: string) => {
+    setBordes((prev) => prev.map((b, i) => (i === idx ? { ...b, [field]: value } : b)));
+  };
 
   const abrirPicker = async () => {
     const seleccion = await (shopify as any).resourcePicker({
@@ -402,6 +416,77 @@ export default function NuevaRegla() {
               name="productIds"
               value={JSON.stringify(productos.map((p) => p.id))}
             />
+          </div>
+
+          {/* Bordes decorativos */}
+          <div style={{ marginTop: 28, borderTop: "1px solid #e4e5e7", paddingTop: 20 }}>
+            <span style={{ ...labelStyle, fontSize: 14, marginBottom: 4 }}>Bordes decorativos</span>
+            <p style={{ fontSize: 13, color: "#6d7175", margin: "0 0 16px" }}>
+              Hasta 4 bordes opcionales. El cliente los ve al configurar la alfombra y puede elegir uno.
+              Sube la imagen en Shopify Admin → Settings → Files, copia la URL CDN y pégala aquí.
+              Un slot con los 3 campos completos aparece en el frontend; si algún campo está vacío, se ignora.
+            </p>
+            {bordes.map((borde, i) => {
+              const completo = !!(borde.imagenUrl && borde.nombre && borde.tipo);
+              return (
+                <div
+                  key={i}
+                  style={{
+                    border: `1px solid ${completo ? "#b0e0c0" : "#e4e5e7"}`,
+                    borderRadius: 6,
+                    padding: "14px 16px",
+                    marginBottom: 12,
+                    background: completo ? "#f0fdf4" : "#fafafa",
+                  }}
+                >
+                  <div style={{ fontSize: 12, fontWeight: 600, color: "#6d7175", marginBottom: 10, textTransform: "uppercase", letterSpacing: 0.5 }}>
+                    Borde {i + 1}{borde.nombre ? ` — ${borde.nombre}` : ""}
+                    {completo && <span style={{ marginLeft: 8, color: "#008060" }}>✓ Completo</span>}
+                  </div>
+                  <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr 1fr", gap: 10, marginBottom: borde.imagenUrl ? 10 : 0 }}>
+                    <div>
+                      <label style={labelStyle}>URL de la imagen</label>
+                      <input
+                        type="url"
+                        value={borde.imagenUrl}
+                        onChange={(e) => actualizarBorde(i, "imagenUrl", e.target.value)}
+                        style={inputStyle}
+                        placeholder="https://cdn.shopify.com/..."
+                      />
+                    </div>
+                    <div>
+                      <label style={labelStyle}>Nombre</label>
+                      <input
+                        type="text"
+                        value={borde.nombre}
+                        onChange={(e) => actualizarBorde(i, "nombre", e.target.value)}
+                        style={inputStyle}
+                        placeholder="Cinta algodón"
+                      />
+                    </div>
+                    <div>
+                      <label style={labelStyle}>Tipo / Color</label>
+                      <input
+                        type="text"
+                        value={borde.tipo}
+                        onChange={(e) => actualizarBorde(i, "tipo", e.target.value)}
+                        style={inputStyle}
+                        placeholder="Beige"
+                      />
+                    </div>
+                  </div>
+                  {borde.imagenUrl && (
+                    <img
+                      src={borde.imagenUrl}
+                      alt={`Preview borde ${i + 1}`}
+                      style={{ width: 90, height: 68, objectFit: "cover", borderRadius: 4, border: "1px solid #e4e5e7", display: "block" }}
+                      onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }}
+                    />
+                  )}
+                </div>
+              );
+            })}
+            <input type="hidden" name="bordes" value={JSON.stringify(bordes)} />
           </div>
 
           {/* Botones */}

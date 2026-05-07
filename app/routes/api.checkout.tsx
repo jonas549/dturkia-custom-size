@@ -46,6 +46,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     waterproofPrecio?: number;
     variantId?: number | string | null;
     productTitle?: string | null;
+    borde?: string | null;
   };
 
   let body: {
@@ -155,6 +156,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         { name: "Ancho",             value: `${item.ancho} cm` },
         { name: "Alto",              value: `${item.alto} cm` },
         { name: "Impermeabilizador", value: item.waterproof ? "Sí" : "No" },
+        ...(item.borde ? [{ name: "Borde", value: item.borde }] : []),
       ],
     };
   });
@@ -214,7 +216,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     const itemPrecio = (item.precio || 0) + (item.waterproof && item.waterproofPrecio ? item.waterproofPrecio : 0);
     try {
       await sql`
-        INSERT INTO "PedidoCustom" (id, shop, "orderId", ancho, alto, waterproof, "precioTotal", estado, "productTitle", "createdAt")
+        INSERT INTO "PedidoCustom" (id, shop, "orderId", ancho, alto, waterproof, "precioTotal", estado, "productTitle", borde, "createdAt")
         VALUES (
           ${randomUUID()},
           ${shop},
@@ -225,6 +227,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
           ${itemPrecio},
           'pendiente',
           ${item.productTitle ?? ""},
+          ${item.borde ?? null},
           NOW()
         )
       `;

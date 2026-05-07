@@ -32,15 +32,36 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 
   const sql = neon(process.env.DIRECT_URL!);
 
-  // Neon tagged template: las comillas dobles en la parte literal del SQL no necesitan escape
-  const reglas = await sql`
-    SELECT r.id, r.activa
-    FROM "ReglaImpermeabilizador" r
-    WHERE r.shop      = ${shop}
-      AND r."productId" = ${productId}
-      AND r.activa    = true
-    LIMIT 1
-  `;
+  const [reglas, configRows] = await Promise.all([
+    sql`
+      SELECT r.id, r.activa
+      FROM "ReglaImpermeabilizador" r
+      WHERE r.shop        = ${shop}
+        AND r."productId" = ${productId}
+        AND r.activa      = true
+      LIMIT 1
+    `,
+    sql`
+      SELECT eyebrow, titulo, descripcion, disclaimer, "chipTexto"
+      FROM "ConfiguracionImpermeabilizador"
+      WHERE shop = ${shop}
+      LIMIT 1
+    `,
+  ]);
+
+  const textos = configRows.length ? {
+    eyebrow:     configRows[0].eyebrow,
+    titulo:      configRows[0].titulo,
+    descripcion: configRows[0].descripcion,
+    disclaimer:  configRows[0].disclaimer,
+    chipTexto:   configRows[0].chipTexto,
+  } : {
+    eyebrow:     "CUIDADO · RECOMENDADO",
+    titulo:      "Impermeabiliza tu alfombra",
+    descripcion: "Protector Textil por sólo {precio}",
+    disclaimer:  "* Los plazos de entrega pueden ser desde 5 días hábiles",
+    chipTexto:   "AGREGAR",
+  };
 
   if (!reglas.length) {
     return new Response(
@@ -66,7 +87,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   }
 
   return new Response(
-    JSON.stringify({ activa: true, variantes: variantesMap }),
+    JSON.stringify({ activa: true, variantes: variantesMap, textos }),
     { status: 200, headers: corsHeaders },
   );
 };

@@ -1,0 +1,347 @@
+{% comment %}
+  Impermeabilizador snippet — autocontenido para temas OS 1.0
+  Pegar en snippets/impermeabilizador-snippet.liquid del tema (no de la extensión).
+  Muestra el checkbox de protector textil en productos de tamaño fijo.
+  IDs requeridos por functions.js: #csw-imp-check, #csw-imp-text
+{% endcomment %}
+
+{% assign csw_shop    = shop.permanent_domain %}
+{% assign csw_product = product.id | prepend: 'gid://shopify/Product/' %}
+
+<div id="csw-imp-root"
+     data-shop="{{ csw_shop }}"
+     data-product-id="{{ csw_product }}"
+     data-variant-id="{{ product.selected_or_first_available_variant.id }}"
+     style="display:none">
+
+  <label id="csw-imp-label" class="csw-imp" for="csw-imp-check">
+    <div class="csw-imp__head">
+      <span class="csw-imp__eyebrow" id="csw-imp-eyebrow">CUIDADO &middot; RECOMENDADO</span>
+      <span class="csw-imp__rule"></span>
+    </div>
+    <div class="csw-imp__row">
+      <div class="csw-imp__body">
+        <p class="csw-imp__title" id="csw-imp-titulo">Impermeabiliza tu alfombra</p>
+        <p class="csw-imp__sub">
+          <span id="csw-imp-desc-before"></span><span id="csw-imp-precio-display" class="csw-imp__price">0</span><span id="csw-imp-desc-after"></span>
+        </p>
+        <p class="csw-imp__disclaimer" id="csw-imp-disclaimer">* Los plazos de entrega pueden ser desde 5 d&iacute;as h&aacute;biles</p>
+      </div>
+      <span class="csw-imp__action">
+        <input type="checkbox" id="csw-imp-check">
+        <span class="csw-imp__chip" id="csw-imp-chip">AGREGAR</span>
+      </span>
+    </div>
+  </label>
+
+  <!-- Span oculto para compatibilidad con functions.js -->
+  <span id="csw-imp-text" style="display:none">0</span>
+</div>
+
+<style>
+  #csw-imp-root {
+    margin: 16px 0;
+    font-family: var(--font, 'Poppins', sans-serif);
+  }
+
+  .csw-imp {
+    display: block;
+    cursor: pointer;
+    background: #F4F0E8;
+    border: 1px solid #E3DCC9;
+    border-left: 3px solid var(--dorado, #A59765);
+    border-radius: 3px;
+    padding: 18px 20px;
+    position: relative;
+    transition: background .2s ease, border-color .2s ease;
+    box-sizing: border-box;
+  }
+
+  .csw-imp:hover { background: #EFEADD; }
+
+  .csw-imp__head {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 10px;
+  }
+
+  .csw-imp__eyebrow {
+    font-size: 10px;
+    letter-spacing: 0.2em;
+    text-transform: uppercase;
+    color: var(--dorado, #A59765);
+    font-weight: 600;
+    white-space: nowrap;
+  }
+
+  .csw-imp__rule {
+    flex: 1;
+    height: 1px;
+    background: #E3DCC9;
+  }
+
+  .csw-imp__row {
+    display: grid;
+    grid-template-columns: 1fr auto;
+    gap: 16px;
+    align-items: end;
+  }
+
+  .csw-imp__title {
+    font-size: var(--f16, 1em);
+    font-weight: 500;
+    color: var(--color, #232930);
+    margin: 0 0 6px;
+    letter-spacing: -0.01em;
+  }
+
+  .csw-imp__sub {
+    font-size: var(--f13, 0.8125em);
+    color: #5C5A54;
+    margin: 0 0 8px;
+    line-height: 1.5;
+  }
+
+  .csw-imp__price {
+    font-weight: 600;
+    color: var(--color, #232930);
+  }
+
+  .csw-imp__disclaimer {
+    font-size: var(--f11, 0.6875em);
+    color: #9A9A9A;
+    margin: 0;
+    line-height: 1.5;
+  }
+
+  .csw-imp__action {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 9px 13px;
+    background: #fff;
+    border: 1px solid #E3DCC9;
+    border-radius: 2px;
+    transition: border-color .18s ease, background .18s ease;
+    user-select: none;
+    white-space: nowrap;
+  }
+
+  .csw-imp__chip {
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--color, #232930);
+    transition: color .18s ease;
+  }
+
+  #csw-imp-check {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 20px;
+    height: 20px;
+    margin: 0;
+    border: 1.5px solid var(--dorado, #A59765);
+    border-radius: 2px;
+    background: #fff;
+    cursor: pointer;
+    position: relative;
+    transition: background .18s ease;
+    flex-shrink: 0;
+  }
+
+  #csw-imp-check:checked {
+    background: var(--dorado, #A59765);
+  }
+
+  #csw-imp-check:checked::after {
+    content: "";
+    position: absolute;
+    left: 6px;
+    top: 2px;
+    width: 5px;
+    height: 10px;
+    border: solid #fff;
+    border-width: 0 1.5px 1.5px 0;
+    transform: rotate(45deg);
+  }
+
+  /* :has() checked state */
+  .csw-imp:has(#csw-imp-check:checked) {
+    background: #EFE8D2;
+    border-color: var(--dorado, #A59765);
+  }
+
+  .csw-imp:has(#csw-imp-check:checked) .csw-imp__action {
+    background: var(--dorado, #A59765);
+    border-color: var(--dorado, #A59765);
+  }
+
+  .csw-imp:has(#csw-imp-check:checked) .csw-imp__chip {
+    color: #fff;
+  }
+
+  .csw-imp:has(#csw-imp-check:checked) #csw-imp-check {
+    background: #fff;
+    border-color: #fff;
+  }
+
+  .csw-imp:has(#csw-imp-check:checked) #csw-imp-check::after {
+    border-color: var(--dorado, #A59765);
+  }
+
+  /* JS fallback for browsers without :has() */
+  .csw-imp.csw-imp--checked {
+    background: #EFE8D2;
+    border-color: var(--dorado, #A59765);
+  }
+
+  .csw-imp.csw-imp--checked .csw-imp__action {
+    background: var(--dorado, #A59765);
+    border-color: var(--dorado, #A59765);
+  }
+
+  .csw-imp.csw-imp--checked .csw-imp__chip {
+    color: #fff;
+  }
+
+  .csw-imp.csw-imp--checked #csw-imp-check {
+    background: #fff;
+    border-color: #fff;
+  }
+
+  .csw-imp.csw-imp--checked #csw-imp-check::after {
+    border-color: var(--dorado, #A59765);
+  }
+
+  @media (max-width: 480px) {
+    .csw-imp__row {
+      grid-template-columns: 1fr;
+      align-items: stretch;
+    }
+
+    .csw-imp__action {
+      justify-content: space-between;
+    }
+  }
+</style>
+
+<script>
+(function () {
+  'use strict';
+
+  var APP_URL = 'https://dturkia-custom-size.vercel.app';
+  var fmt = new Intl.NumberFormat('es-CL', { style: 'decimal', maximumFractionDigits: 0 });
+
+  function eid(id) { return document.getElementById(id); }
+
+  var variantesGlobal = {};
+  var descPartes = ['', ''];
+
+  function actualizarPrecio(variantId) {
+    var root    = eid('csw-imp-root');
+    var check   = eid('csw-imp-check');
+    var textEl  = eid('csw-imp-text');
+    var dispEl  = eid('csw-imp-precio-display');
+
+    if (!root) return;
+
+    var vid     = String(variantId || '').replace('gid://shopify/ProductVariant/', '');
+    var entrada = variantesGlobal[vid] || variantesGlobal['gid://shopify/ProductVariant/' + vid];
+
+    if (!entrada || !entrada.aplica || !entrada.precio) {
+      root.style.display = 'none';
+      if (check) check.checked = false;
+      var lbl = eid('csw-imp-label');
+      if (lbl) lbl.classList.remove('csw-imp--checked');
+      return;
+    }
+
+    var precioFormateado = '$' + fmt.format(entrada.precio);
+    if (textEl)  textEl.textContent  = precioFormateado;
+    if (dispEl)  dispEl.textContent  = precioFormateado;
+
+    root.style.display = '';
+  }
+
+  function init() {
+    var root = eid('csw-imp-root');
+    if (!root) return;
+
+    var shop      = root.dataset.shop;
+    var productId = root.dataset.productId;
+    var variantId = root.dataset.variantId;
+    if (!shop || !productId) return;
+
+    var apiUrl = APP_URL + '/api/impermeabilizador'
+      + '?shop='      + encodeURIComponent(shop)
+      + '&productId=' + encodeURIComponent(productId);
+
+    fetch(apiUrl)
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (data) {
+        if (!data || !data.activa) return;
+
+        variantesGlobal = data.variantes || {};
+
+        // Aplicar textos configurados por el merchant
+        var t = data.textos || {};
+        var eyebrow    = t.eyebrow    || 'CUIDADO · RECOMENDADO';
+        var titulo     = t.titulo     || 'Impermeabiliza tu alfombra';
+        var descripcion= t.descripcion|| 'Protector Textil por sólo {precio}';
+        var disclaimer = t.disclaimer || '* Los plazos de entrega pueden ser desde 5 días hábiles';
+        var chipTexto  = t.chipTexto  || 'AGREGAR';
+
+        if (eid('csw-imp-eyebrow'))    eid('csw-imp-eyebrow').textContent    = eyebrow;
+        if (eid('csw-imp-titulo'))     eid('csw-imp-titulo').textContent     = titulo;
+        if (eid('csw-imp-disclaimer')) eid('csw-imp-disclaimer').textContent = disclaimer;
+        if (eid('csw-imp-chip'))       eid('csw-imp-chip').textContent       = chipTexto;
+
+        // Interpolar {precio} en la descripción
+        descPartes = descripcion.split('{precio}');
+        if (eid('csw-imp-desc-before')) eid('csw-imp-desc-before').textContent = descPartes[0] || '';
+        if (eid('csw-imp-desc-after'))  eid('csw-imp-desc-after').textContent  = descPartes[1] || '';
+        if (eid('csw-imp-precio-display') && descPartes.length < 2) {
+          eid('csw-imp-precio-display').style.display = 'none';
+        }
+
+        // Mostrar precio para la variante actual
+        actualizarPrecio(variantId);
+
+        // Escuchar cambios de variante — compatible con eventos estándar de Shopify themes
+        document.addEventListener('variant:change', function (e) {
+          var v = e.detail && (e.detail.variant || e.detail);
+          if (v && v.id) actualizarPrecio(v.id);
+        });
+
+        // También escuchar cambios en selectores nativos de variante
+        var selects = document.querySelectorAll('select[name="id"]');
+        selects.forEach(function(sel) {
+          sel.addEventListener('change', function() {
+            actualizarPrecio(this.value);
+          });
+        });
+
+        // Toggle visual al cambiar checkbox
+        var check = eid('csw-imp-check');
+        var label = eid('csw-imp-label');
+        if (check && label) {
+          check.addEventListener('change', function() {
+            label.classList.toggle('csw-imp--checked', this.checked);
+          });
+        }
+      })
+      .catch(function () {
+        // Si falla la API, mantener la sección oculta
+      });
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', init);
+  } else {
+    init();
+  }
+})();
+</script>

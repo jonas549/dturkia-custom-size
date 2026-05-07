@@ -44,6 +44,7 @@ model ReglaPersonalizada {
   waterproofPorM2  Float    @default(0)
   activa           Boolean  @default(true)
   productIds       String[] @default([])
+  bordes           Json     @default("[]")
   createdAt        DateTime @default(now())
 }
 
@@ -58,6 +59,7 @@ model PedidoCustom {
   estado       String   @default("pendiente")
   productTitle String   @default("")
   tipo         String   @default("medida")
+  borde        String?
   createdAt    DateTime @default(now())
 }
 
@@ -86,8 +88,13 @@ model VarianteImpermeabilizador {
 }
 
 model ConfiguracionImpermeabilizador {
-  id         String   @id @default(cuid())
-  shop       String   @unique
-  costoPorM2 Float    @default(13100)
-  updatedAt  DateTime @updatedAt
+  id          String   @id @default(cuid())
+  shop        String   @unique
+  costoPorM2  Float    @default(13100)
+  eyebrow     String   @default("CUIDADO · RECOMENDADO")
+  titulo      String   @default("Impermeabiliza tu alfombra")
+  descripcion String   @default("Protector Textil por sólo {precio}")
+  disclaimer  String   @default("* Los plazos de entrega pueden ser desde 5 días hábiles")
+  chipTexto   String   @default("AGREGAR")
+  updatedAt   DateTime @updatedAt
 }

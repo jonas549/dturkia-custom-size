@@ -38,17 +38,25 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 
   const sql = neon(process.env.DIRECT_URL!);
 
-  const rows = await sql`
-    SELECT * FROM "ReglaPersonalizada"
-    WHERE shop = ${shop}
-    AND activa = true
-    AND (
-      ${productId} = ANY("productIds")
-      OR array_length("productIds", 1) IS NULL
-      OR "productIds" = '{}'
-    )
-    LIMIT 1
-  `;
+  const [rows, configRows] = await Promise.all([
+    sql`
+      SELECT * FROM "ReglaPersonalizada"
+      WHERE shop = ${shop}
+      AND activa = true
+      AND (
+        ${productId} = ANY("productIds")
+        OR array_length("productIds", 1) IS NULL
+        OR "productIds" = '{}'
+      )
+      LIMIT 1
+    `,
+    sql`
+      SELECT eyebrow, titulo, descripcion, disclaimer, "chipTexto"
+      FROM "ConfiguracionImpermeabilizador"
+      WHERE shop = ${shop}
+      LIMIT 1
+    `,
+  ]);
 
   if (!rows.length) {
     console.log("[api.precio] No se encontró regla activa");
@@ -60,6 +68,30 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 
   const regla = rows[0];
   console.log("[api.precio] Regla encontrada:", regla);
+
+  // Bordes: filtrar solo los que tienen los 3 campos completos
+  type BordeItem = { imagenUrl: string; nombre: string; tipo: string };
+  const bordesRaw = Array.isArray(regla.bordes) ? (regla.bordes as BordeItem[]) : [];
+  const bordes = bordesRaw.filter(
+    (b) => b && typeof b.imagenUrl === "string" && b.imagenUrl.trim() &&
+           typeof b.nombre    === "string" && b.nombre.trim() &&
+           typeof b.tipo      === "string" && b.tipo.trim()
+  );
+
+  // Textos impermeabilizador (con defaults si el merchant no los configuró)
+  const textosImp = configRows.length ? {
+    eyebrow:     configRows[0].eyebrow,
+    titulo:      configRows[0].titulo,
+    descripcion: configRows[0].descripcion,
+    disclaimer:  configRows[0].disclaimer,
+    chipTexto:   configRows[0].chipTexto,
+  } : {
+    eyebrow:     "CUIDADO · RECOMENDADO",
+    titulo:      "Impermeabiliza tu alfombra",
+    descripcion: "Protector Textil por sólo {precio}",
+    disclaimer:  "* Los plazos de entrega pueden ser desde 5 días hábiles",
+    chipTexto:   "AGREGAR",
+  };
 
   // Redondear cm → m hacia arriba (ej: 230cm → 3m) y cobrar por m² enteros
   const anchoM = Math.ceil(ancho / 100);
@@ -81,6 +113,8 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
         minAlto: regla.minAlto,
         maxAlto: regla.maxAlto,
       },
+      bordes,
+      textosImp,
     }),
     { status: 200, headers: corsHeaders },
   );

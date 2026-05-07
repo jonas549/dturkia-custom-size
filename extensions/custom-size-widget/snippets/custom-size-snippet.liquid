@@ -64,11 +64,34 @@
       </div>
     </div>
 
+    <!-- Impermeabilizador — Propuesta B; display toggled by JS -->
     <div id="csw-waterproof-section" style="display:none">
-      <label>
-        <input type="checkbox" id="csw-waterproof">
-        A&#241;adir impermeabilizador (+<span id="csw-waterproof-precio">0</span> CLP)
+      <label id="csw-wf-label" class="csw-wf" for="csw-waterproof">
+        <div class="csw-wf__head">
+          <span class="csw-wf__eyebrow" id="csw-wf-eyebrow">CUIDADO &middot; RECOMENDADO</span>
+          <span class="csw-wf__rule"></span>
+        </div>
+        <div class="csw-wf__row">
+          <div class="csw-wf__body">
+            <p class="csw-wf__title" id="csw-wf-titulo">Impermeabiliza tu alfombra</p>
+            <p class="csw-wf__sub"><span id="csw-wf-before"></span><span id="csw-waterproof-precio" class="csw-wf__price">0</span><span id="csw-wf-after"></span></p>
+            <p class="csw-wf__disclaimer" id="csw-wf-disclaimer">* Los plazos de entrega pueden ser desde 5 d&iacute;as h&aacute;biles</p>
+          </div>
+          <span class="csw-wf__action">
+            <input type="checkbox" id="csw-waterproof">
+            <span class="csw-wf__chip" id="csw-wf-chip">AGREGAR</span>
+          </span>
+        </div>
       </label>
+    </div>
+
+    <!-- Bordes decorativos — renderizados por JS cuando data.bordes tiene ítems -->
+    <div id="csw-bordes-section" style="display:none">
+      <div class="csw-bordes-head">
+        <p class="csw-bordes-ttl">Elige el borde <small>Cinta decorativa que termina los cuatro lados de tu alfombra.</small></p>
+        <span class="csw-bordes-sel" id="csw-borde-sel-label"></span>
+      </div>
+      <div class="csw-bordes-grid" id="csw-bordes-grid"></div>
     </div>
 
     <div class="csw-resumen">
@@ -180,30 +203,331 @@
     letter-spacing: 0.5px;
   }
 
+  /* ── Impermeabilizador Propuesta B ───────────────────────────── */
   #csw-waterproof-section {
     margin-bottom: 20px;
-    padding: 12px 16px;
-    background: var(--grisclaro, #f2f2f2);
-    border: 1px solid var(--crema, #E3DECC);
   }
 
-  #csw-waterproof-section label {
+  .csw-wf {
+    display: block;
+    cursor: pointer;
+    background: #F4F0E8;
+    border: 1px solid #E3DCC9;
+    border-left: 3px solid var(--dorado, #A59765);
+    border-radius: 3px;
+    padding: 18px 20px;
+    position: relative;
+    transition: background .2s ease, border-color .2s ease;
+    box-sizing: border-box;
+  }
+
+  .csw-wf:hover { background: #EFEADD; }
+
+  .csw-wf__head {
     display: flex;
     align-items: center;
     gap: 10px;
-    font-size: var(--f13, 0.8125em);
-    color: var(--color, #232930);
-    cursor: pointer;
+    margin-bottom: 10px;
   }
 
-  #csw-waterproof-section input[type="checkbox"] {
-    width: 15px;
-    height: 15px;
+  .csw-wf__eyebrow {
+    font-size: 10px;
+    letter-spacing: 0.2em;
+    text-transform: uppercase;
+    color: var(--dorado, #A59765);
+    font-weight: 600;
+    white-space: nowrap;
+  }
+
+  .csw-wf__rule {
+    flex: 1;
+    height: 1px;
+    background: #E3DCC9;
+  }
+
+  .csw-wf__row {
+    display: grid;
+    grid-template-columns: 1fr auto;
+    gap: 16px;
+    align-items: end;
+  }
+
+  .csw-wf__title {
+    font-size: var(--f16, 1em);
+    font-weight: 500;
+    color: var(--color, #232930);
+    margin: 0 0 6px;
+    letter-spacing: -0.01em;
+  }
+
+  .csw-wf__sub {
+    font-size: var(--f13, 0.8125em);
+    color: #5C5A54;
+    margin: 0 0 8px;
+    line-height: 1.5;
+  }
+
+  .csw-wf__price {
+    font-weight: 600;
+    color: var(--color, #232930);
+  }
+
+  .csw-wf__disclaimer {
+    font-size: var(--f11, 0.6875em);
+    color: #9A9A9A;
+    margin: 0;
+    line-height: 1.5;
+  }
+
+  .csw-wf__action {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 9px 13px;
+    background: #fff;
+    border: 1px solid #E3DCC9;
+    border-radius: 2px;
+    transition: border-color .18s ease, background .18s ease;
+    user-select: none;
+    white-space: nowrap;
+  }
+
+  .csw-wf__chip {
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--color, #232930);
+    transition: color .18s ease;
+  }
+
+  #csw-waterproof {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 20px;
+    height: 20px;
+    margin: 0;
+    border: 1.5px solid var(--dorado, #A59765);
+    border-radius: 2px;
+    background: #fff;
     cursor: pointer;
-    accent-color: var(--dorado, #A59765);
+    position: relative;
+    transition: background .18s ease;
     flex-shrink: 0;
   }
 
+  #csw-waterproof:checked {
+    background: var(--dorado, #A59765);
+  }
+
+  #csw-waterproof:checked::after {
+    content: "";
+    position: absolute;
+    left: 6px;
+    top: 2px;
+    width: 5px;
+    height: 10px;
+    border: solid #fff;
+    border-width: 0 1.5px 1.5px 0;
+    transform: rotate(45deg);
+  }
+
+  /* :has() checked state — progressively enhanced */
+  .csw-wf:has(#csw-waterproof:checked) {
+    background: #EFE8D2;
+    border-color: var(--dorado, #A59765);
+  }
+
+  .csw-wf:has(#csw-waterproof:checked) .csw-wf__action {
+    background: var(--dorado, #A59765);
+    border-color: var(--dorado, #A59765);
+  }
+
+  .csw-wf:has(#csw-waterproof:checked) .csw-wf__chip {
+    color: #fff;
+  }
+
+  .csw-wf:has(#csw-waterproof:checked) #csw-waterproof {
+    background: #fff;
+    border-color: #fff;
+  }
+
+  .csw-wf:has(#csw-waterproof:checked) #csw-waterproof::after {
+    border-color: var(--dorado, #A59765);
+  }
+
+  /* JS fallback for browsers without :has() */
+  .csw-wf.csw-wf--checked {
+    background: #EFE8D2;
+    border-color: var(--dorado, #A59765);
+  }
+
+  .csw-wf.csw-wf--checked .csw-wf__action {
+    background: var(--dorado, #A59765);
+    border-color: var(--dorado, #A59765);
+  }
+
+  .csw-wf.csw-wf--checked .csw-wf__chip {
+    color: #fff;
+  }
+
+  .csw-wf.csw-wf--checked #csw-waterproof {
+    background: #fff;
+    border-color: #fff;
+  }
+
+  .csw-wf.csw-wf--checked #csw-waterproof::after {
+    border-color: var(--dorado, #A59765);
+  }
+
+  /* ── Bordes decorativos ──────────────────────────────────────── */
+  #csw-bordes-section {
+    margin-bottom: 20px;
+  }
+
+  .csw-bordes-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-end;
+    margin-bottom: 14px;
+    padding-bottom: 12px;
+    border-bottom: 1px solid var(--crema, #E3DECC);
+  }
+
+  .csw-bordes-ttl {
+    font-size: var(--f14, 0.875em);
+    font-weight: 500;
+    color: var(--color, #232930);
+    margin: 0;
+  }
+
+  .csw-bordes-ttl small {
+    display: block;
+    font-size: var(--f11, 0.6875em);
+    color: var(--grisoscuro, #9A9A9A);
+    font-weight: 400;
+    margin-top: 3px;
+    letter-spacing: 0.02em;
+  }
+
+  .csw-bordes-sel {
+    font-size: var(--f11, 0.6875em);
+    color: var(--grisoscuro, #9A9A9A);
+    white-space: nowrap;
+    margin-left: 12px;
+    flex-shrink: 0;
+  }
+
+  .csw-bordes-sel b {
+    color: var(--color, #232930);
+    font-weight: 500;
+  }
+
+  .csw-bordes-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 12px;
+  }
+
+  .csw-b-card {
+    position: relative;
+    cursor: pointer;
+    background: #fff;
+    border: 1px solid var(--crema, #E3DECC);
+    border-radius: 3px;
+    overflow: hidden;
+    transition: transform .2s ease, border-color .2s ease, box-shadow .2s ease;
+    display: flex;
+    flex-direction: column;
+  }
+
+  .csw-b-card:hover {
+    transform: translateY(-2px);
+    border-color: #C9C3B2;
+    box-shadow: 0 6px 20px -10px rgba(35,41,48,.18);
+  }
+
+  .csw-b-thumb {
+    aspect-ratio: 4 / 3;
+    overflow: hidden;
+    position: relative;
+    background: var(--crema, #E3DECC);
+  }
+
+  .csw-b-thumb img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+  }
+
+  .csw-b-badge {
+    position: absolute;
+    top: 10px;
+    left: 10px;
+    background: rgba(255,255,255,0.92);
+    color: var(--color, #232930);
+    font-size: 9px;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    font-weight: 600;
+    padding: 5px 8px;
+    border-radius: 2px;
+    opacity: 0;
+    transform: translateY(-4px);
+    transition: opacity .25s ease, transform .25s ease;
+  }
+
+  .csw-b-meta {
+    padding: 11px 12px 13px;
+    border-top: 1px solid var(--crema, #E3DECC);
+    transition: background .2s ease, border-color .2s ease;
+  }
+
+  .csw-b-meta .csw-b-nombre {
+    font-size: 9.5px;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--grisoscuro, #9A9A9A);
+    font-weight: 500;
+    margin: 0 0 3px;
+  }
+
+  .csw-b-meta .csw-b-tipo {
+    font-size: var(--f14, 0.875em);
+    font-weight: 500;
+    color: var(--color, #232930);
+    margin: 0;
+    transition: color .2s ease;
+  }
+
+  .csw-b-card.is-selected {
+    border-color: var(--dorado, #A59765);
+  }
+
+  .csw-b-card.is-selected .csw-b-thumb::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    border: 2px solid var(--dorado, #A59765);
+    pointer-events: none;
+  }
+
+  .csw-b-card.is-selected .csw-b-meta {
+    background: #F4F0E8;
+    border-top-color: var(--dorado, #A59765);
+  }
+
+  .csw-b-card.is-selected .csw-b-meta .csw-b-tipo {
+    color: var(--dorado, #A59765);
+  }
+
+  .csw-b-card.is-selected .csw-b-badge {
+    opacity: 1;
+    transform: translateY(0);
+  }
+
+  /* ── Resumen ─────────────────────────────────────────────────── */
   .csw-resumen {
     background: var(--grisclaro, #f2f2f2);
     padding: 14px 16px;
@@ -263,6 +587,47 @@
 
   @media (max-width: 480px) {
     .csw-container { padding: 16px; }
+
+    .csw-wf__row {
+      grid-template-columns: 1fr;
+      align-items: stretch;
+    }
+
+    .csw-wf__action {
+      justify-content: space-between;
+    }
+
+    /* Bordes: horizontal cards on mobile */
+    .csw-bordes-grid {
+      grid-template-columns: 1fr;
+    }
+
+    .csw-b-card {
+      flex-direction: row;
+    }
+
+    .csw-b-thumb {
+      aspect-ratio: unset;
+      width: 90px;
+      flex-shrink: 0;
+    }
+
+    .csw-b-meta {
+      flex: 1;
+      border-top: none;
+      border-left: 1px solid var(--crema, #E3DECC);
+    }
+
+    .csw-b-card.is-selected .csw-b-meta {
+      border-left-color: var(--dorado, #A59765);
+    }
+
+    .csw-b-badge {
+      top: 7px;
+      left: 7px;
+      padding: 4px 6px;
+      font-size: 8px;
+    }
   }
 </style>
 
@@ -276,7 +641,6 @@
 
   function eid(id) { return document.getElementById(id); }
 
-  // Quita la clase que oculta nativos (usada tanto en éxito con regla como en fallback)
   function mostrarNativos() {
     document.documentElement.classList.remove('csw-natives-hidden');
   }
@@ -309,15 +673,100 @@
     eid('csw-precio-total').textContent = fmt.format(total);
   }
 
+  // ── Bordes ─────────────────────────────────────────────────────
+  var bordeSeleccionado = null;
+
+  function renderBordes(bordes, preselect) {
+    if (!bordes || !bordes.length) return;
+
+    var section = eid('csw-bordes-section');
+    var grid    = eid('csw-bordes-grid');
+    var selLbl  = eid('csw-borde-sel-label');
+    if (!section || !grid) return;
+
+    // 4 bordes → 2×2 desktop
+    if (bordes.length === 4) {
+      grid.style.gridTemplateColumns = 'repeat(2, 1fr)';
+    }
+
+    bordes.forEach(function(borde, idx) {
+      var key = borde.nombre + ' - ' + borde.tipo;
+      var card = document.createElement('div');
+      card.className = 'csw-b-card';
+      card.setAttribute('role', 'button');
+      card.setAttribute('tabindex', '0');
+      card.setAttribute('aria-label', borde.nombre + ' ' + borde.tipo);
+
+      var thumb = document.createElement('div');
+      thumb.className = 'csw-b-thumb';
+
+      var img = document.createElement('img');
+      img.src = borde.imagenUrl;
+      img.alt = borde.nombre + ' ' + borde.tipo;
+      img.style.width = '100%';
+      img.style.height = '100%';
+      img.style.objectFit = 'cover';
+      img.style.display = 'block';
+      img.onerror = function() { this.style.display = 'none'; };
+
+      var badge = document.createElement('span');
+      badge.className = 'csw-b-badge';
+      badge.textContent = 'Seleccionado';
+
+      thumb.appendChild(img);
+      thumb.appendChild(badge);
+
+      var meta = document.createElement('div');
+      meta.className = 'csw-b-meta';
+
+      var nombre = document.createElement('p');
+      nombre.className = 'csw-b-nombre';
+      nombre.textContent = borde.nombre;
+
+      var tipo = document.createElement('p');
+      tipo.className = 'csw-b-tipo';
+      tipo.textContent = borde.tipo;
+
+      meta.appendChild(nombre);
+      meta.appendChild(tipo);
+      card.appendChild(thumb);
+      card.appendChild(meta);
+
+      // Preselect from edit mode
+      if (preselect && preselect === key) {
+        card.classList.add('is-selected');
+        bordeSeleccionado = { nombre: borde.nombre, tipo: borde.tipo };
+        if (selLbl) { selLbl.innerHTML = 'Seleccionado: <b>' + borde.tipo + '</b>'; }
+      }
+
+      function seleccionar() {
+        grid.querySelectorAll('.csw-b-card').forEach(function(c) {
+          c.classList.remove('is-selected');
+        });
+        card.classList.add('is-selected');
+        bordeSeleccionado = { nombre: borde.nombre, tipo: borde.tipo };
+        if (selLbl) { selLbl.innerHTML = 'Seleccionado: <b>' + borde.tipo + '</b>'; }
+      }
+
+      card.addEventListener('click', seleccionar);
+      card.addEventListener('keydown', function(e) {
+        if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); seleccionar(); }
+      });
+
+      grid.appendChild(card);
+    });
+
+    section.style.display = '';
+  }
+
   function init() {
     var root = document.getElementById('csw-root');
     if (!root) return;
 
-    var shop          = root.dataset.shop;
-    var productId     = root.dataset.productId;
+    var shop      = root.dataset.shop;
+    var productId = root.dataset.productId;
     if (!shop) return;
 
-    // Modo edición: detectar parámetros en URL
     var urlParams     = new URLSearchParams(window.location.search);
     var editId        = urlParams.get('csw_edit') || '';
     var editAncho     = editId ? parseInt(urlParams.get('ancho') || '0', 10) : 0;
@@ -325,7 +774,19 @@
     var editWp        = editId ? urlParams.get('waterproof') === '1' : false;
     var enModoEdicion = !!editId;
 
-    // Timeout de seguridad: si la API no responde en 8s, restaurar nativos
+    // Recuperar borde del item siendo editado
+    var editBorde = '';
+    if (enModoEdicion) {
+      try {
+        var rawEx = localStorage.getItem('csw_pending_orders');
+        if (rawEx) {
+          var exArr = JSON.parse(rawEx);
+          var exItem = exArr.find(function(i) { return i.id === editId; });
+          if (exItem && exItem.borde) editBorde = exItem.borde;
+        }
+      } catch (e) {}
+    }
+
     var safetyFired = false;
     var safetyTimer = setTimeout(function() {
       safetyFired = true;
@@ -349,7 +810,6 @@
         var containerEl = root.querySelector('.csw-container');
 
         if (!data || data.error) {
-          // Sin regla: ocultar widget y restaurar elementos nativos
           root.style.display = 'none';
           mostrarNativos();
           return;
@@ -360,7 +820,6 @@
         var waterproofPorM2  = data.waterproofPorM2 || 0;
         var waterproofActivo = !!data.waterproofActivo;
 
-        // Configurar sliders
         var sAncho   = eid('csw-ancho');
         var sAlto    = eid('csw-alto');
         var midAncho = Math.round((regla.minAncho + regla.maxAncho) / 2);
@@ -376,7 +835,6 @@
         eid('csw-alto-min').textContent  = regla.minAlto  + ' cm';
         eid('csw-alto-max').textContent  = regla.maxAlto  + ' cm';
 
-        // Modo edición: precargar sliders con valores del URL
         if (enModoEdicion) {
           if (editAncho >= parseInt(regla.minAncho) && editAncho <= parseInt(regla.maxAncho)) {
             sAncho.value = editAncho;
@@ -388,29 +846,51 @@
           }
         }
 
+        // Aplicar textos del impermeabilizador
+        var imp = data.textosImp || {};
+        var eyebrow    = imp.eyebrow    || 'CUIDADO · RECOMENDADO';
+        var titulo     = imp.titulo     || 'Impermeabiliza tu alfombra';
+        var descripcion= imp.descripcion|| 'Protector Textil por sólo {precio}';
+        var disclaimer = imp.disclaimer || '* Los plazos de entrega pueden ser desde 5 días hábiles';
+        var chipTexto  = imp.chipTexto  || 'AGREGAR';
+
+        if (eid('csw-wf-eyebrow'))    eid('csw-wf-eyebrow').textContent    = eyebrow;
+        if (eid('csw-wf-titulo'))     eid('csw-wf-titulo').textContent     = titulo;
+        if (eid('csw-wf-disclaimer')) eid('csw-wf-disclaimer').textContent = disclaimer;
+        if (eid('csw-wf-chip'))       eid('csw-wf-chip').textContent       = chipTexto;
+
+        // Interpolar {precio} en la descripción
+        var parts = descripcion.split('{precio}');
+        if (eid('csw-wf-before')) eid('csw-wf-before').textContent = parts[0] || '';
+        if (eid('csw-wf-after'))  eid('csw-wf-after').textContent  = parts[1] || '';
+        if (eid('csw-waterproof-precio') && parts.length < 2) {
+          eid('csw-waterproof-precio').style.display = 'none';
+        }
+
         if (waterproofActivo) {
           eid('csw-waterproof-section').style.display = '';
           if (enModoEdicion && editWp && eid('csw-waterproof')) {
             eid('csw-waterproof').checked = true;
+            var wfLabel = eid('csw-wf-label');
+            if (wfLabel) wfLabel.classList.add('csw-wf--checked');
           }
         }
 
         calcular(precioPorM2, waterproofPorM2, waterproofActivo);
 
-        // Ocultar nativos (tanto si server-side no los ocultó como si sí)
+        // Renderizar bordes
+        renderBordes(data.bordes || [], editBorde);
+
         document.documentElement.classList.add('csw-natives-hidden');
-        // Transición loading → widget
         if (loadingEl)   loadingEl.style.display   = 'none';
         if (containerEl) containerEl.style.display = '';
         root.style.display = '';
 
-        // Modo edición: indicador visual + texto del botón
         if (enModoEdicion) {
           eid('csw-agregar').textContent = 'Actualizar medidas';
           if (containerEl) containerEl.classList.add('csw-modo-edicion');
         }
 
-        // Eventos sliders
         sAncho.addEventListener('input', function () {
           eid('csw-ancho-val').textContent = sAncho.value;
           calcular(precioPorM2, waterproofPorM2, waterproofActivo);
@@ -421,11 +901,12 @@
         });
         if (waterproofActivo && eid('csw-waterproof')) {
           eid('csw-waterproof').addEventListener('change', function () {
+            var wfLabel = eid('csw-wf-label');
+            if (wfLabel) wfLabel.classList.toggle('csw-wf--checked', this.checked);
             calcular(precioPorM2, waterproofPorM2, waterproofActivo);
           });
         }
 
-        // Botón "Agregar a la bolsa" / "Actualizar medidas"
         eid('csw-agregar').addEventListener('click', function () {
           mostrarError('');
 
@@ -436,6 +917,9 @@
 
           var precioAlfombra = Math.round(m2 * precioPorM2);
           var precioWp       = Math.round(m2 * waterproofPorM2);
+          var bordeStr       = bordeSeleccionado
+            ? (bordeSeleccionado.nombre + ' - ' + bordeSeleccionado.tipo)
+            : null;
 
           try {
             var arr = [];
@@ -444,7 +928,6 @@
               var parsedArr = JSON.parse(rawArr);
               if (Array.isArray(parsedArr)) arr = parsedArr;
             }
-            // Migration: formato viejo (objeto único) → array
             var rawViejo = localStorage.getItem('csw_pending_order');
             if (rawViejo) {
               var viejo = JSON.parse(rawViejo);
@@ -456,7 +939,6 @@
             }
 
             if (enModoEdicion && editId) {
-              // Reemplazar item existente — preservar campos no editables
               var reemplazado = false;
               arr = arr.map(function(existing) {
                 if (existing.id !== editId) return existing;
@@ -469,6 +951,7 @@
                   waterproof:       !!wpChecked,
                   precio:           precioAlfombra,
                   waterproofPrecio: precioWp,
+                  borde:            bordeStr !== null ? bordeStr : (existing.borde || null),
                   variantId:        existing.variantId       || root.dataset.variantId    || '',
                   imageUrl:         existing.imageUrl        || root.dataset.imageUrl     || '',
                   productTitle:     existing.productTitle    || (document.querySelector('.product h1') || {}).textContent || '',
@@ -480,6 +963,7 @@
                 arr.push({
                   id: editId, shop: shop, ancho: anchoN, alto: altoN,
                   waterproof: !!wpChecked, precio: precioAlfombra, waterproofPrecio: precioWp,
+                  borde: bordeStr,
                   variantId: root.dataset.variantId || '', imageUrl: root.dataset.imageUrl || '',
                   productTitle: (document.querySelector('.product h1') || {}).textContent || '',
                   productHandle: root.dataset.productHandle || '', createdAt: Date.now()
@@ -490,6 +974,7 @@
               arr.push({
                 id: itemId, shop: shop, ancho: anchoN, alto: altoN,
                 waterproof: !!wpChecked, precio: precioAlfombra, waterproofPrecio: precioWp,
+                borde: bordeStr,
                 variantId: root.dataset.variantId || '', imageUrl: root.dataset.imageUrl || '',
                 productTitle: (document.querySelector('.product h1') || {}).textContent || '',
                 productHandle: root.dataset.productHandle || '', createdAt: Date.now()
@@ -501,7 +986,6 @@
             return;
           }
 
-          // En modo edición: limpiar URL y resetear UI
           if (enModoEdicion) {
             history.replaceState({}, '', window.location.pathname);
             eid('csw-agregar').textContent = 'Agregar a la bolsa';
