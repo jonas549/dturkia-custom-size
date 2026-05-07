@@ -10,45 +10,19 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   const config = await prisma.configuracionImpermeabilizador.findUnique({
     where: { shop: session.shop },
   });
-  return {
-    costoPorM2:  config?.costoPorM2  ?? 13100,
-    eyebrow:     config?.eyebrow     ?? "CUIDADO · RECOMENDADO",
-    titulo:      config?.titulo      ?? "Impermeabiliza tu alfombra",
-    descripcion: config?.descripcion ?? "Protector Textil por sólo {precio}",
-    disclaimer:  config?.disclaimer  ?? "* Los plazos de entrega pueden ser desde 5 días hábiles",
-    chipTexto:   config?.chipTexto   ?? "AGREGAR",
-  };
+  return { costoPorM2: config?.costoPorM2 ?? 13100 };
 };
 
 export const action = async ({ request }: ActionFunctionArgs) => {
   const { session } = await authenticate.admin(request);
   const fd = await request.formData();
-
-  if (fd.get("_action") === "guardar-textos") {
-    const eyebrow     = String(fd.get("eyebrow")     ?? "CUIDADO · RECOMENDADO").trim();
-    const titulo      = String(fd.get("titulo")      ?? "Impermeabiliza tu alfombra").trim();
-    const descripcion = String(fd.get("descripcion") ?? "Protector Textil por sólo {precio}").trim();
-    const disclaimer  = String(fd.get("disclaimer")  ?? "* Los plazos de entrega pueden ser desde 5 días hábiles").trim();
-    const chipTexto   = String(fd.get("chipTexto")   ?? "AGREGAR").trim();
-
-    await prisma.configuracionImpermeabilizador.upsert({
-      where:  { shop: session.shop },
-      update: { eyebrow, titulo, descripcion, disclaimer, chipTexto },
-      create: { shop: session.shop, eyebrow, titulo, descripcion, disclaimer, chipTexto },
-    });
-
-    return { ok: true, type: "textos", eyebrow, titulo, descripcion, disclaimer, chipTexto };
-  }
-
-  // Default: guardar costo
   const costoPorM2 = Number(fd.get("costoPorM2")) || 13100;
   await prisma.configuracionImpermeabilizador.upsert({
     where:  { shop: session.shop },
     update: { costoPorM2 },
     create: { shop: session.shop, costoPorM2 },
   });
-
-  return { ok: true, type: "costo", costoPorM2 };
+  return { ok: true, costoPorM2 };
 };
 
 // ── Estilos ──────────────────────────────────────────────────────────────────
@@ -66,11 +40,7 @@ export default function ConfiguracionImpermeabilizador() {
   const saving                     = navigation.state === "submitting";
 
   const inicial = loaderData.costoPorM2;
-  // Si el action guardó costo exitosamente, usar ese valor para que la calculadora sea coherente sin recargar
-  const costoPorM2Efectivo = (actionData?.ok && actionData.type === "costo") ? actionData.costoPorM2 : inicial;
-
-  // Valores actuales de textos (post-save sin recarga)
-  const textosActuales = (actionData?.ok && actionData.type === "textos") ? actionData : loaderData;
+  const costoPorM2Efectivo = actionData?.ok ? actionData.costoPorM2 : inicial;
 
   const [ancho,     setAncho]     = useState("");
   const [alto,      setAlto]      = useState("");
@@ -129,92 +99,6 @@ export default function ConfiguracionImpermeabilizador() {
           </div>
           <button type="submit" style={submitBtn} disabled={saving}>
             {saving ? "Guardando…" : "Guardar"}
-          </button>
-        </Form>
-      </s-section>
-
-      {/* ── Configuración de textos ── */}
-      <s-section heading="Configuración de textos del checkbox">
-        <s-paragraph>
-          Estos textos aparecen en el bloque del impermeabilizador en la página de producto.
-          Usa <strong>{"{precio}"}</strong> en el campo Descripción — el sistema lo reemplaza automáticamente con el precio calculado.
-          Si borras <strong>{"{precio}"}</strong> de la descripción, el precio no aparecerá.
-        </s-paragraph>
-
-        {actionData?.ok && actionData.type === "textos" && (
-          <div style={{ background: "#d4edda", color: "#155724", border: "1px solid #c3e6cb", borderRadius: 6, padding: "10px 14px", margin: "14px 0", fontSize: 14 }}>
-            ✓ Textos guardados correctamente.
-          </div>
-        )}
-
-        <Form method="post" style={{ marginTop: 16 }}>
-          <input type="hidden" name="_action" value="guardar-textos" />
-
-          <div style={{ marginBottom: 14 }}>
-            <label style={labelStyle}>Eyebrow (texto pequeño superior)</label>
-            <input
-              type="text"
-              name="eyebrow"
-              defaultValue={textosActuales.eyebrow}
-              key={textosActuales.eyebrow}
-              style={inputStyle}
-              placeholder="CUIDADO · RECOMENDADO"
-            />
-          </div>
-
-          <div style={{ marginBottom: 14 }}>
-            <label style={labelStyle}>Título principal</label>
-            <input
-              type="text"
-              name="titulo"
-              defaultValue={textosActuales.titulo}
-              key={textosActuales.titulo}
-              style={inputStyle}
-              placeholder="Impermeabiliza tu alfombra"
-            />
-          </div>
-
-          <div style={{ marginBottom: 14 }}>
-            <label style={labelStyle}>
-              Descripción con precio{" "}
-              <span style={{ fontWeight: 400, color: "#6d7175" }}>(usa {"{precio}"} donde va el precio)</span>
-            </label>
-            <input
-              type="text"
-              name="descripcion"
-              defaultValue={textosActuales.descripcion}
-              key={textosActuales.descripcion}
-              style={inputStyle}
-              placeholder="Protector Textil por sólo {precio}"
-            />
-          </div>
-
-          <div style={{ marginBottom: 14 }}>
-            <label style={labelStyle}>Disclaimer (texto pequeño inferior)</label>
-            <input
-              type="text"
-              name="disclaimer"
-              defaultValue={textosActuales.disclaimer}
-              key={textosActuales.disclaimer}
-              style={inputStyle}
-              placeholder="* Los plazos de entrega pueden ser desde 5 días hábiles"
-            />
-          </div>
-
-          <div style={{ marginBottom: 16 }}>
-            <label style={labelStyle}>Texto del chip de acción</label>
-            <input
-              type="text"
-              name="chipTexto"
-              defaultValue={textosActuales.chipTexto}
-              key={textosActuales.chipTexto}
-              style={{ ...inputStyle, width: 200 }}
-              placeholder="AGREGAR"
-            />
-          </div>
-
-          <button type="submit" style={submitBtn} disabled={saving}>
-            {saving ? "Guardando…" : "Guardar textos"}
           </button>
         </Form>
       </s-section>

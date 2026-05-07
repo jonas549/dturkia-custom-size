@@ -135,7 +135,10 @@ export default function ImpermeabilizadorList() {
       <s-section>
         <div style={{ display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap", marginBottom: 4 }}>
           <s-link href="/app/impermeabilizador/configuracion">
-            ⚙ Configuración (costo por m²: ${costoPorM2.toLocaleString("es-CL")} CLP)
+            ⚙ Configuración de costo (${costoPorM2.toLocaleString("es-CL")} CLP/m²)
+          </s-link>
+          <s-link href="/app/impermeabilizador/textos">
+            ✏ Configuración de textos
           </s-link>
         </div>
 
