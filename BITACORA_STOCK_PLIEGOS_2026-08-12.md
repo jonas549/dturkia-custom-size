@@ -2,7 +2,7 @@
 
 **Proyecto:** dturkia-custom-size (D'Turkia · `dturkia.myshopify.com`)
 **Iniciada:** 2026-08-12
-**Estado:** ✅ **Fases 1 y 2 COMPLETADAS** — motor validado contra la base real. Siguiente: Fase 3 (admin)
+**Estado:** ✅ **Fases 1, 2 y 3 COMPLETADAS** — motor y admin listos. Siguiente: Fase 4 (checkout en modo observación)
 **Última actualización:** 2026-08-13
 
 > ### ⚠️ LEER ANTES DE TOCAR NADA — sobre "Ceniza"
@@ -694,6 +694,57 @@ los rollos ya empezados**. Commit + push.
 
 ---
 
+#### ✅ Entregado el 2026-08-13
+
+Archivos: `app/routes/app.pliegos._index.tsx` (nuevo) · `app/routes/app.pliegos.$reglaId.tsx` (nuevo) ·
+`app/routes/app.tsx` (1 línea de nav) · `app/lib/pliegos.server.ts` (funciones de administración).
+
+**Se añadió una 4ª pestaña, Movimientos**, que el plan no pedía explícitamente pero que el §4.1 exige
+de facto: `MovimientoPliego` existe para auditar altas y ajustes, y sin pantalla no se puede
+consultar. Es de solo lectura.
+
+**Decisiones de implementación:**
+
+1. **El SQL de administración vive en `pliegos.server.ts`**, no en las rutas: `altaMasiva()`,
+   `ajustarPliego()`, `cambiarActivo()`, `reservasDeTrama()`, `cortesDeTrama()`,
+   `movimientosDeTrama()`, `prefijoSugerido()`. Las rutas quedan de presentación.
+2. **Códigos autogenerados** con formato `PREFIJO-ancho-NN`. El correlativo arranca después del mayor
+   existente **para ese prefijo + ese ancho**, así que dos altas seguidas del mismo ancho continúan
+   (01-03, luego 04-05) y otro ancho arranca su propia serie. `ON CONFLICT DO NOTHING` cubre la
+   carrera de dos altas simultáneas: se crean menos filas y la UI informa cuántas se omitieron.
+   El prefijo se sugiere desde el nombre de la trama (`Alfombra test 2` → `ALF`) y es editable.
+3. **El admin pide metros, la DB guarda centímetros enteros** (§4.3). La conversión ocurre en el
+   `action`, en el borde exacto.
+4. **`motivo` de `MovimientoPliego` se extendió con `'reactivacion'`**, además de las
+   `'alta' | 'ajuste' | 'baja'` del §4.1. El campo es texto libre; una reactivación no es un ajuste
+   ni una baja y mezclarlas hacía la auditoría ilegible. En baja/reactivación `largoCm = 0` porque el
+   cambio de estado no mueve el largo; en `'ajuste'` se guarda el **delta** (negativo si se descontó).
+5. **Ajuste con validación de rango**: rechaza negativos, rechaza superar `largoTotalCm` (si entró
+   material nuevo, se da de alta otro rollo) y rechaza el no-cambio. La nota es obligatoria.
+6. **Reconciliación por demanda en el índice** (§3.2.3). Solo hace trabajo si hay reservas vencidas:
+   una `SELECT` barata y salida temprana. Si resolvió algo, releva el estado y lo avisa en pantalla.
+7. **La ruta `/app/pliegos/debug` de la Fase 2 convive con `/app/pliegos/:reglaId`** sin conflicto:
+   React Router puntúa el segmento estático por encima del dinámico. Verificado en el build.
+
+**Validación ejecutada contra la base real (todo revertido al terminar):**
+
+| Caso | Resultado |
+|---|---|
+| `prefijoSugerido()` con tildes, dígitos y fallback | ✅ ALF · CEN · ANI · PLG |
+| Alta masiva 3 rollos | ✅ QAT-400-01/02/03 |
+| 2ª alta del mismo ancho continúa el correlativo | ✅ 04, 05 |
+| Otro ancho arranca su propia serie | ✅ QAT-100-01/02 |
+| Movimientos `'alta'` por rollo | ✅ 7/7 |
+| Ajuste 20.10 → 15.00 m | ✅ delta −510 cm registrado con su nota |
+| Ajuste que supera el total / negativo / sin cambio | ✅ los 3 rechazados |
+| Baja → el motor deja de elegir el rollo | ✅ SIN_STOCK |
+| Baja → `capacidades()` deja de ofrecerlo | ✅ `[]` |
+| Reactivar → vuelve a elegirse | ✅ |
+| Baja y reactivación auditadas | ✅ 2 movimientos |
+| Estado final de la DB | ✅ 11 pliegos / 23110 cm / 11 movimientos / 0 reservas |
+
+---
+
 ### FASE 4 — Integración en el checkout, en MODO OBSERVACIÓN
 
 **Qué se hace y en qué archivos**
@@ -896,11 +947,11 @@ registrado en `MovimientoPliego` con nota obligatoria. Es **corregible, no autom
 
 | | |
 |---|---|
-| **Fase actual** | ✅ **Fases 1 y 2 COMPLETADAS** (2026-08-13). Motor implementado y validado contra la base real; ruta de diagnóstico desplegada. |
+| **Fase actual** | ✅ **Fases 1, 2 y 3 COMPLETADAS** (2026-08-13). Motor validado y admin de pliegos operativo. |
 | **Bloqueantes** | Ninguno. |
 | **Datos en producción** | 11 pliegos · 23110 cm · colgados de `Alfombra test 2` (`cmoipz5lp0000l704zvl3nx6h`) · 11 `MovimientoPliego` motivo `alta` · 0 reservas |
-| **Pendiente de QA** | Que Jonas recorra `/app/pliegos/debug` y confirme la matriz. El motor **no está cableado a ningún checkout**: cero impacto en ventas hasta la Fase 4. |
-| **Siguiente entregable** | **Fase 3** (no arrancada): admin `/app/pliegos` + `/app/pliegos/$reglaId` con alta masiva, ajustes y las pestañas Reservas y Cortes. |
+| **Pendiente de QA** | Que Jonas recorra `/app/pliegos`: alta masiva, ajuste con nota, baja/reactivación, y confirmar en `/app/pliegos/debug` que el motor deja de elegir un rollo dado de baja. |
+| **Siguiente entregable** | **Fase 4** (no arrancada): integración en `api.checkout.tsx` **y** `api.checkout-impermeabilizador.tsx` con `PLIEGOS_MODO=off\|log\|bloqueo`, desplegada en `log`. Es **la primera fase que toca el flujo de compra real** — hasta ahora todo es cero impacto en ventas. |
 
 ### Historial
 
@@ -914,7 +965,8 @@ registrado en `MovimientoPliego` con nota obligatoria. Es **corregible, no autom
 | 2026-08-13 | — | **Supuesto corregido: Ceniza no existe** | Verificado en Neon + Shopify. Decisión del cliente: el MVP corre sobre `Alfombra test 2`. Ceniza queda como paso futuro. Ver aviso de la cabecera. |
 | 2026-08-13 | **1** | ✅ **FASE 1 COMPLETADA** — migración aplicada, 11 pliegos sembrados, validaciones aprobadas | `migrate deploy` OK · 11 pliegos / 23110 cm / 231.10 m sobre `Alfombra test 2` · 11 movimientos `alta` · CHECK y las 3 FK `RESTRICT` verificadas mordiendo. Añadidas las FK de `ReservaPliego.pliegoId` y `MovimientoPliego.pliegoId` (no estaban en el §4.1 original). |
 | 2026-08-13 | **2** | ✅ **FASE 2 COMPLETADA** — motor `app/lib/pliegos.server.ts` + ruta `/app/pliegos/debug` | Sentencia atómica validada contra la base real (matriz §5.3, idempotencia, expiración, concurrencia, reparto de rollos). **Bug encontrado y corregido en el §5.4**: el filtro de largo estaba después del `LIMIT 1` y devolvía SIN_STOCK teniendo stock. `FOR UPDATE OF p` confirmado dentro del CTE. Sin cablear a checkout → cero impacto en ventas. |
-| | **3** | ⬜ Pendiente | |
+| 2026-08-13 | **2** | ✅ QA de Fase 2 aprobado por Jonas | Matriz corrida en `/app/pliegos/debug` sobre `Alfombra test 2`: 6/6 casos verdes, 0 reservas residuales. |
+| 2026-08-13 | **3** | ✅ **FASE 3 COMPLETADA** — admin `/app/pliegos` + `/app/pliegos/$reglaId` + nav | Alta masiva con código correlativo, ajuste con nota obligatoria, baja/reactivación (nunca DELETE), pestañas Reservas · Cortes · Movimientos, y reconciliación por demanda al abrir el índice. Validado contra la base real y revertido. Sigue sin tocar el flujo de compra. |
 | | **4** | ⬜ Pendiente | |
 | | **5** | ⬜ Pendiente | |
 | | **6** | ⬜ Pendiente | |

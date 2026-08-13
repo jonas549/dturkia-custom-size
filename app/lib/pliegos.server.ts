@@ -524,6 +524,43 @@ export async function reconciliar(shop: string, reglaId: string): Promise<Resume
 
 // ── Lectura de estado (diagnóstico y admin) ─────────────────────────────────
 
+export type ReservaFila = {
+  id: string;
+  refId: string;
+  pliegoCodigo: string;
+  largoCm: number;
+  anchoPedidoCm: number;
+  altoPedidoCm: number;
+  rotada: boolean;
+  estado: string;
+  draftOrderId: string | null;
+  createdAt: string;
+  resueltaAt: string | null;
+  vencida: boolean;
+};
+
+export type CorteFila = {
+  id: string;
+  orderId: string;
+  orderName: string;
+  pliegoCodigo: string;
+  anchoCm: number;
+  altoCm: number;
+  rotada: boolean;
+  productTitle: string;
+  estado: string;
+  createdAt: string;
+};
+
+export type MovimientoFila = {
+  id: string;
+  pliegoCodigo: string;
+  largoCm: number;
+  motivo: string;
+  nota: string;
+  createdAt: string;
+};
+
 /** Estado de todos los pliegos de una trama, con la disponibilidad real. */
 export async function estadoPliegos(shop: string, reglaId: string): Promise<PliegoEstado[]> {
   const sql = db();
@@ -552,5 +589,237 @@ export async function estadoPliegos(shop: string, reglaId: string): Promise<Plie
     disponibleCm: Number(f.largoRestanteCm) - Number(f.ocupadoCm),
     activo: Boolean(f.activo),
     reservasVigentes: Number(f.reservasVigentes),
+  }));
+}
+
+// ── Administración (Fase 3) ─────────────────────────────────────────────────
+
+/**
+ * Prefijo de código a partir del nombre de la trama: "Alfombra Ceniza" → "ALF".
+ * Solo se usa como valor por defecto; el admin puede sobrescribirlo.
+ */
+export function prefijoSugerido(nombre: string): string {
+  // NFD separa la tilde en un carácter combinante propio; nos quedamos solo
+  // con las letras ASCII, así "Ceniza Añil" → "CEN".
+  const limpio = nombre
+    .normalize("NFD")
+    .split("")
+    .filter((c) => /[a-zA-Z]/.test(c))
+    .join("")
+    .toUpperCase();
+  return (limpio.slice(0, 3) || "PLG").padEnd(3, "X");
+}
+
+export type ResultadoAlta = { creados: string[]; omitidos: number };
+
+/**
+ * Alta masiva: `ancho | largo | cantidad` → N filas con código autogenerado.
+ * Es el formato real en que llega el inventario del cliente (§2.5).
+ *
+ * El correlativo arranca después del mayor ya existente para ese prefijo+ancho,
+ * y el `ON CONFLICT DO NOTHING` cubre la carrera improbable de dos altas
+ * simultáneas: se crean menos filas de las pedidas y se informa cuántas.
+ */
+export async function altaMasiva(
+  shop: string,
+  reglaId: string,
+  params: { prefijo: string; anchoCm: number; largoCm: number; cantidad: number; nota: string },
+): Promise<ResultadoAlta> {
+  const { prefijo, anchoCm, largoCm, cantidad, nota } = params;
+  const sql = db();
+
+  const creados = await sql`
+    WITH base AS (
+      SELECT COALESCE(MAX(SUBSTRING(codigo FROM '([0-9]+)$')::int), 0) AS ultimo
+      FROM "Pliego"
+      WHERE shop = ${shop}
+        AND "reglaId" = ${reglaId}
+        AND codigo LIKE ${prefijo + "-" + anchoCm + "-"} || '%'
+    )
+    INSERT INTO "Pliego"
+      ("id", "shop", "reglaId", "codigo", "anchoCm", "largoTotalCm", "largoRestanteCm",
+       "activo", "nota", "createdAt")
+    SELECT gen_random_uuid()::text, ${shop}, ${reglaId},
+           ${prefijo + "-" + anchoCm + "-"} || LPAD((base.ultimo + g)::text, 2, '0'),
+           ${anchoCm}::int, ${largoCm}::int, ${largoCm}::int, true, ${nota}, NOW()
+    FROM base, generate_series(1, ${cantidad}::int) AS g
+    ON CONFLICT ("shop", "codigo") DO NOTHING
+    RETURNING "codigo"
+  `;
+
+  // Auditoría: un movimiento 'alta' por rollo, con el largo con que entró.
+  if (creados.length) {
+    await sql`
+      INSERT INTO "MovimientoPliego" ("id", "shop", "pliegoId", "largoCm", "motivo", "nota", "createdAt")
+      SELECT gen_random_uuid()::text, ${shop}, p.id, p."largoTotalCm", 'alta',
+             ${nota || "Alta masiva desde el admin"}, NOW()
+      FROM "Pliego" p
+      WHERE p.shop = ${shop}
+        AND p."reglaId" = ${reglaId}
+        AND p.codigo = ANY(${creados.map((c: any) => String(c.codigo))})
+    `;
+  }
+
+  log(`alta masiva regla=${reglaId}: ${creados.length}/${cantidad} rollos ${anchoCm}x${largoCm}`);
+  return {
+    creados: creados.map((c: any) => String(c.codigo)),
+    omitidos: cantidad - creados.length,
+  };
+}
+
+/**
+ * Ajuste manual del largo restante. Es la mitigación del riesgo §7.3: cortes por
+ * WhatsApp, ventas en local y mermas no pasan por la app y desincronizan el stock.
+ * La nota es obligatoria y queda en `MovimientoPliego` con el delta aplicado.
+ */
+export async function ajustarPliego(
+  shop: string,
+  pliegoId: string,
+  nuevoLargoRestanteCm: number,
+  nota: string,
+): Promise<{ ok: true; delta: number; codigo: string } | { ok: false; error: string }> {
+  const sql = db();
+
+  const filas = await sql`
+    SELECT "codigo", "largoTotalCm", "largoRestanteCm"
+    FROM "Pliego" WHERE id = ${pliegoId} AND shop = ${shop} LIMIT 1
+  `;
+  if (!filas.length) return { ok: false, error: "El pliego no existe." };
+
+  const p: any = filas[0];
+  if (nuevoLargoRestanteCm < 0) return { ok: false, error: "El largo restante no puede ser negativo." };
+  if (nuevoLargoRestanteCm > Number(p.largoTotalCm)) {
+    return {
+      ok: false,
+      error: `El largo restante no puede superar el largo total (${p.largoTotalCm} cm). Si entró material nuevo, da de alta otro rollo.`,
+    };
+  }
+
+  const delta = nuevoLargoRestanteCm - Number(p.largoRestanteCm);
+  if (delta === 0) return { ok: false, error: "El valor es el mismo que ya tenía." };
+
+  await sql`
+    UPDATE "Pliego" SET "largoRestanteCm" = ${nuevoLargoRestanteCm}::int
+    WHERE id = ${pliegoId} AND shop = ${shop}
+  `;
+  await sql`
+    INSERT INTO "MovimientoPliego" ("id", "shop", "pliegoId", "largoCm", "motivo", "nota", "createdAt")
+    VALUES (gen_random_uuid()::text, ${shop}, ${pliegoId}, ${delta}::int, 'ajuste', ${nota}, NOW())
+  `;
+
+  log(`ajuste ${p.codigo}: ${p.largoRestanteCm} → ${nuevoLargoRestanteCm} (${delta >= 0 ? "+" : ""}${delta}) — ${nota}`);
+  return { ok: true, delta, codigo: String(p.codigo) };
+}
+
+/**
+ * Baja o reactivación. NUNCA se borra un pliego (§4.3): un DELETE rompería la
+ * trazabilidad histórica, y además las FK `RESTRICT` de reservas y movimientos
+ * lo impiden a nivel de base.
+ *
+ * `motivo` usa 'baja' | 'reactivacion'. 'reactivacion' es una extensión del set
+ * documentado en el §4.1 ('alta' | 'ajuste' | 'baja'); el campo es texto libre.
+ * `largoCm = 0` porque un cambio de estado no mueve el largo.
+ */
+export async function cambiarActivo(
+  shop: string,
+  pliegoId: string,
+  activo: boolean,
+  nota: string,
+): Promise<boolean> {
+  const sql = db();
+  const filas = await sql`
+    UPDATE "Pliego" SET activo = ${activo}
+    WHERE id = ${pliegoId} AND shop = ${shop}
+    RETURNING "codigo"
+  `;
+  if (!filas.length) return false;
+
+  await sql`
+    INSERT INTO "MovimientoPliego" ("id", "shop", "pliegoId", "largoCm", "motivo", "nota", "createdAt")
+    VALUES (gen_random_uuid()::text, ${shop}, ${pliegoId}, 0,
+            ${activo ? "reactivacion" : "baja"}, ${nota}, NOW())
+  `;
+  log(`${activo ? "reactivado" : "dado de baja"} ${(filas[0] as any).codigo} — ${nota}`);
+  return true;
+}
+
+/** Reservas de una trama: vigentes primero, luego vencidas sin resolver. */
+export async function reservasDeTrama(shop: string, reglaId: string): Promise<ReservaFila[]> {
+  const sql = db();
+  const filas = await sql`
+    SELECT r."id", r."refId", r."largoCm", r."anchoPedidoCm", r."altoPedidoCm",
+           r."rotada", r."estado", r."draftOrderId", r."createdAt", r."resueltaAt",
+           p."codigo",
+           (r.estado = 'pendiente'
+            AND r."createdAt" <= NOW() - make_interval(mins => ${RESERVA_TTL_MIN}::int)) AS vencida
+    FROM "ReservaPliego" r
+    JOIN "Pliego" p ON p.id = r."pliegoId"
+    WHERE r.shop = ${shop} AND r."reglaId" = ${reglaId}
+    ORDER BY r."createdAt" DESC
+    LIMIT 200
+  `;
+  return filas.map((f: any) => ({
+    id: String(f.id),
+    refId: String(f.refId),
+    pliegoCodigo: String(f.codigo),
+    largoCm: Number(f.largoCm),
+    anchoPedidoCm: Number(f.anchoPedidoCm),
+    altoPedidoCm: Number(f.altoPedidoCm),
+    rotada: Boolean(f.rotada),
+    estado: String(f.estado),
+    draftOrderId: f.draftOrderId ? String(f.draftOrderId) : null,
+    createdAt: new Date(f.createdAt).toISOString(),
+    resueltaAt: f.resueltaAt ? new Date(f.resueltaAt).toISOString() : null,
+    vencida: Boolean(f.vencida),
+  }));
+}
+
+/**
+ * LA PANTALLA DEL TALLER (decisión 5). Como el código de pliego no viaja en la
+ * orden de Shopify, éste es el único sitio donde se cruza orden ↔ pliego.
+ */
+export async function cortesDeTrama(shop: string, reglaId: string): Promise<CorteFila[]> {
+  const sql = db();
+  const filas = await sql`
+    SELECT pc."id", pc."orderId", pc."orderName", pc."pliegoCodigo",
+           pc."ancho", pc."alto", pc."rotada", pc."productTitle", pc."estado", pc."createdAt"
+    FROM "PedidoCustom" pc
+    JOIN "Pliego" p ON p.id = pc."pliegoId"
+    WHERE pc.shop = ${shop} AND p."reglaId" = ${reglaId}
+    ORDER BY pc."createdAt" DESC
+    LIMIT 200
+  `;
+  return filas.map((f: any) => ({
+    id: String(f.id),
+    orderId: String(f.orderId),
+    orderName: String(f.orderName ?? ""),
+    pliegoCodigo: String(f.pliegoCodigo ?? ""),
+    anchoCm: Number(f.ancho),
+    altoCm: Number(f.alto),
+    rotada: Boolean(f.rotada),
+    productTitle: String(f.productTitle ?? ""),
+    estado: String(f.estado),
+    createdAt: new Date(f.createdAt).toISOString(),
+  }));
+}
+
+/** Historial de altas y ajustes de una trama. */
+export async function movimientosDeTrama(shop: string, reglaId: string): Promise<MovimientoFila[]> {
+  const sql = db();
+  const filas = await sql`
+    SELECT m."id", m."largoCm", m."motivo", m."nota", m."createdAt", p."codigo"
+    FROM "MovimientoPliego" m
+    JOIN "Pliego" p ON p.id = m."pliegoId"
+    WHERE m.shop = ${shop} AND p."reglaId" = ${reglaId}
+    ORDER BY m."createdAt" DESC
+    LIMIT 100
+  `;
+  return filas.map((f: any) => ({
+    id: String(f.id),
+    pliegoCodigo: String(f.codigo),
+    largoCm: Number(f.largoCm),
+    motivo: String(f.motivo),
+    nota: String(f.nota ?? ""),
+    createdAt: new Date(f.createdAt).toISOString(),
   }));
 }
