@@ -1,5 +1,6 @@
 import type { LoaderFunctionArgs } from "react-router";
 import { neon } from "@neondatabase/serverless";
+import { confirmarPorDraftOrder, modoPliegos } from "../lib/pliegos.server";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -76,6 +77,23 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       }
     }),
   );
+
+  // Stock por pliego (§3.2.1): éste es el disparador principal de confirmación.
+  // El tema ya hace polling aquí y este endpoint ya consulta el estado del draft,
+  // así que confirmar sale prácticamente gratis. `confirmarPorDraftOrder` es
+  // idempotente: pasar dos veces por el mismo draft no descuenta dos veces.
+  if (completedIds.length && modoPliegos() !== "off") {
+    await Promise.all(
+      completedIds.map(async (id) => {
+        try {
+          const n = await confirmarPorDraftOrder(shop, id);
+          if (n) console.log(`[PLIEGOS] check-paid: draft ${id} pagado → ${n} reserva(s) confirmada(s)`);
+        } catch (e) {
+          console.error(`[PLIEGOS] check-paid: error confirmando draft ${id}:`, e);
+        }
+      }),
+    );
+  }
 
   return new Response(JSON.stringify({ completedIds }), { status: 200, headers: corsHeaders });
 };

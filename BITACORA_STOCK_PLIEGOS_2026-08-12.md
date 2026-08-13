@@ -2,7 +2,7 @@
 
 **Proyecto:** dturkia-custom-size (D'Turkia · `dturkia.myshopify.com`)
 **Iniciada:** 2026-08-12
-**Estado:** ✅ **Fases 1, 2 y 3 COMPLETADAS** — motor y admin listos. Siguiente: Fase 4 (checkout en modo observación)
+**Estado:** ✅ **Fases 1-4 COMPLETADAS** — checkout integrado en modo observación. Falta que Jonas cree `PLIEGOS_MODO=log` en Vercel
 **Última actualización:** 2026-08-13
 
 > ### ⚠️ LEER ANTES DE TOCAR NADA — sobre "Ceniza"
@@ -783,6 +783,73 @@ abandonada) y pasar los logs.
 
 ---
 
+#### ✅ Entregado el 2026-08-13
+
+Archivos: `app/lib/pliegos.server.ts` (orquestación) · `app/routes/api.checkout.tsx` ·
+`app/routes/api.checkout-impermeabilizador.tsx` · `app/routes/api.check-paid.tsx`.
+
+**El hallazgo que obligó a añadir algo al plan:** el tema todavía **no manda `reglaId`** (llega en la
+Fase 6) ni **`item.id`** (Fase 7). Sin eso, en la Fase 4 no habría nada que reservar y la fase sería
+imposible de validar con compras reales, que es justo su propósito.
+**Solución:** el backend resuelve la trama por su cuenta — `item.variantId` → producto (una llamada
+GraphQL para todas las variantes del carrito) → la `ReglaPersonalizada` que lo tenga en `productIds`.
+El orden de preferencia es `item.reglaId` → resolución por variante → item legacy sin reserva. Además
+sigue siendo útil después de la Fase 7, como red para los items que queden en el localStorage de
+clientes.
+
+**Guarda de seguridad crítica:** antes de reservar se comprueba que la trama **tenga pliegos
+cargados**. Sin esto, en `MODO=bloqueo` una trama sin inventario cargado devolvería `SIN_STOCK`
+siempre y bloquearía todas sus ventas. Con la guarda, una trama sin pliegos simplemente no tiene
+control de stock, que es lo que dice el §7.4.
+
+**Idempotencia degradada hasta la Fase 7:** sin `item.id`, el `refId` se genera (`auto_<uuid>`), así
+que un doble clic crearía dos reservas. Se registra en el log cada vez que ocurre. En `MODO=log` es
+inocuo; conviene pasar a `bloqueo` solo después de la Fase 7.
+
+**`orderName`** se toma de la respuesta de Shopify: `draft_order.name` en REST y el campo `name`
+añadido a la mutación GraphQL. Es lo que permite cruzar orden ↔ pliego en la pestaña Cortes.
+
+**Bug pre-existente corregido** (§2.2.7): `api.checkout-impermeabilizador.tsx` no guardaba `borde` en
+`PedidoCustom`. Añadido.
+
+> ⚠️ **Diferencia relacionada que NO se tocó:** ese mismo endpoint tampoco añade el `Borde` como
+> `customAttribute` de la línea del Draft Order, mientras que `api.checkout.tsx` sí lo hace como
+> `property`. Es decir, en un carrito mixto el borde ya no se pierde en la base, pero sigue sin verse
+> en la orden de Shopify. Cambiarlo altera lo que ve el cliente en su pedido, así que queda a
+> decisión de Jonas.
+
+**Comportamiento por modo, verificado:**
+
+| | `off` | `log` | `bloqueo` |
+|---|---|---|---|
+| Reserva | no | sí | sí |
+| Venta sin stock | pasa | **pasa** (solo registra) | rechazada con 409 |
+| Trama sin pliegos | pasa | pasa | **pasa** (guarda de seguridad) |
+| Default si la env var no existe | ✅ | | |
+
+**Validación ejecutada contra la base real (sin crear Draft Orders en Shopify, todo revertido):**
+
+| Caso | Resultado |
+|---|---|
+| `MODO=off` no escribe nada | ✅ |
+| Resolución `variantId` → trama sin `reglaId` | ✅ reservó CEN-300-01 |
+| Item legacy sin `reglaId` ni `variantId` | ✅ pasa sin reservar |
+| `MODO=log` con item imposible | ✅ NO bloquea |
+| `MODO=bloqueo` con el mismo caso | ✅ 409 + mensaje al cliente |
+| `MODO=bloqueo` compensa lo ya reservado | ✅ 0 pendientes |
+| Trama sin pliegos en `bloqueo` | ✅ no bloquea |
+| Ciclo reservar → vincular → pagar → confirmar | ✅ −350 cm |
+| Confirmar dos veces (polling de check-paid) | ✅ idempotente |
+| Fallo del draft → `anular()` libera el material | ✅ 1820 → 2170 |
+| Estado final de la DB | ✅ 11 pliegos / 23110 cm / 0 reservas |
+
+> **Nota de comportamiento en `log`:** `reservar()` es todo-o-nada **por trama**. Si un carrito lleva
+> un item viable y otro imposible de la misma trama, en modo `log` no queda asignado ninguno de los
+> dos (se compensa el primero antes de registrar el SIN_STOCK). Es deliberado: `log` debe ensayar
+> exactamente lo que hará `bloqueo`, no una variante más permisiva.
+
+---
+
 ### FASE 5 — `/api/precio` devuelve capacidades
 
 **Qué se hace y en qué archivos**
@@ -947,11 +1014,12 @@ registrado en `MovimientoPliego` con nota obligatoria. Es **corregible, no autom
 
 | | |
 |---|---|
-| **Fase actual** | ✅ **Fases 1, 2 y 3 COMPLETADAS** (2026-08-13). Motor validado y admin de pliegos operativo. |
+| **Fase actual** | ✅ **Fases 1-4 COMPLETADAS** (2026-08-13). Checkout integrado en los dos endpoints, desactivado por bandera. |
 | **Bloqueantes** | Ninguno. |
+| **Acción pendiente de Jonas** | **Crear `PLIEGOS_MODO=log` en Vercel** (Settings → Environment Variables → Production) y redeploy. Sin esa variable el modo es `off` y el control de stock no hace nada — el comportamiento es idéntico al de antes. |
 | **Datos en producción** | 11 pliegos · 23110 cm · colgados de `Alfombra test 2` (`cmoipz5lp0000l704zvl3nx6h`) · 11 `MovimientoPliego` motivo `alta` · 0 reservas |
-| **Pendiente de QA** | Que Jonas recorra `/app/pliegos`: alta masiva, ajuste con nota, baja/reactivación, y confirmar en `/app/pliegos/debug` que el motor deja de elegir un rollo dado de baja. |
-| **Siguiente entregable** | **Fase 4** (no arrancada): integración en `api.checkout.tsx` **y** `api.checkout-impermeabilizador.tsx` con `PLIEGOS_MODO=off\|log\|bloqueo`, desplegada en `log`. Es **la primera fase que toca el flujo de compra real** — hasta ahora todo es cero impacto en ventas. |
+| **Pendiente de QA** | Compras de prueba en `MODO=log`: una pagada, una abandonada, y una con carrito mixto. Revisar los logs `[PLIEGOS]` en Vercel y la pestaña Cortes. |
+| **Siguiente entregable** | **Fase 5** (no arrancada): `/api/precio` devuelve `reglaId` + `capacidades` + topes acotados con `min(comercial, físico)`. Es aditiva y no puede romper el snippet actual. **Ojo:** ahí es donde el `maxAncho/maxAlto = 21` de `Alfombra test 2` empezará a importar. |
 
 ### Historial
 
@@ -967,7 +1035,8 @@ registrado en `MovimientoPliego` con nota obligatoria. Es **corregible, no autom
 | 2026-08-13 | **2** | ✅ **FASE 2 COMPLETADA** — motor `app/lib/pliegos.server.ts` + ruta `/app/pliegos/debug` | Sentencia atómica validada contra la base real (matriz §5.3, idempotencia, expiración, concurrencia, reparto de rollos). **Bug encontrado y corregido en el §5.4**: el filtro de largo estaba después del `LIMIT 1` y devolvía SIN_STOCK teniendo stock. `FOR UPDATE OF p` confirmado dentro del CTE. Sin cablear a checkout → cero impacto en ventas. |
 | 2026-08-13 | **2** | ✅ QA de Fase 2 aprobado por Jonas | Matriz corrida en `/app/pliegos/debug` sobre `Alfombra test 2`: 6/6 casos verdes, 0 reservas residuales. |
 | 2026-08-13 | **3** | ✅ **FASE 3 COMPLETADA** — admin `/app/pliegos` + `/app/pliegos/$reglaId` + nav | Alta masiva con código correlativo, ajuste con nota obligatoria, baja/reactivación (nunca DELETE), pestañas Reservas · Cortes · Movimientos, y reconciliación por demanda al abrir el índice. Validado contra la base real y revertido. Sigue sin tocar el flujo de compra. |
-| | **4** | ⬜ Pendiente | |
+| 2026-08-13 | **3** | ✅ QA de Fase 3 aprobado por Jonas | La pantalla carga y muestra los 11 rollos correctamente. |
+| 2026-08-13 | **4** | ✅ **FASE 4 COMPLETADA** — reserva integrada en los DOS endpoints de checkout, modo observación | `PLIEGOS_MODO=off\|log\|bloqueo` con default `off`. Confirmación en `/api/check-paid`. Corregido el bug del `borde` en `api.checkout-impermeabilizador.tsx`. **Añadido al plan:** resolución de trama desde `variantId`, porque el tema aún no manda `reglaId` (Fase 6) y sin eso la fase no se podía validar. **Guarda de seguridad:** una trama sin pliegos nunca bloquea. Los 3 modos validados contra la base real. |
 | | **5** | ⬜ Pendiente | |
 | | **6** | ⬜ Pendiente | |
 | | **7** | ⬜ Pendiente | |

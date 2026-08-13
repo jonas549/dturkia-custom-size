@@ -1,6 +1,12 @@
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
 import { neon } from "@neondatabase/serverless";
 import { randomUUID } from "node:crypto";
+import {
+  anular,
+  procesarCheckoutPliegos,
+  vincularDraftOrder,
+  type ItemMedidaCheckout,
+} from "../lib/pliegos.server";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -38,6 +44,10 @@ type ItemInput = {
   precio?: number | null;
   waterproofPrecio?: number | null;
   productTitle?: string | null;
+  borde?: string | null;
+  // Stock por pliego (Fase 4). El tema los enviará en las Fases 6 y 7.
+  id?: string | null;
+  reglaId?: string | null;
 };
 
 export const action = async ({ request }: ActionFunctionArgs) => {
@@ -114,6 +124,34 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     );
   }
 
+  // ── Stock por pliego (§5.5 pasos 1-2) — ANTES de crear el Draft Order ─────
+  // Este endpoint también procesa items tipo 'medida': functions.js:729 rutea
+  // TODO el carrito aquí si hay ≥1 item de impermeabilizador (§2.2.1). Por eso
+  // la lógica de stock tiene que vivir en los dos endpoints.
+  // Los items 'impermeabilizador' son productos de talla fija: no reservan nada.
+  const itemsMedida: ItemMedidaCheckout[] = items
+    .map((item, indice) => ({ item, indice }))
+    .filter(({ item }) => item.tipo !== "impermeabilizador" && item.ancho && item.alto)
+    .map(({ item, indice }) => ({
+      indice,
+      refId: item.id ?? null,
+      reglaId: item.reglaId ?? null,
+      variantId: item.variantId ?? null,
+      anchoCm: Number(item.ancho),
+      altoCm: Number(item.alto),
+    }));
+
+  const pliegos = await procesarCheckoutPliegos(shop, itemsMedida, accessToken);
+
+  if (pliegos.bloquear) {
+    return new Response(
+      JSON.stringify({ error: pliegos.error, motivo: "SIN_STOCK" }),
+      { status: 409, headers: corsHeaders },
+    );
+  }
+
+  const asignacionPorIndice = new Map(pliegos.asignaciones.map((a) => [a.indice, a.reserva]));
+
   // Construir line items para el Draft Order GraphQL
   const lineItems: object[] = [];
 
@@ -168,6 +206,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       draftOrderCreate(input: $input) {
         draftOrder {
           id
+          name
           invoiceUrl
         }
         userErrors {
@@ -198,7 +237,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   const gqlData = await gqlResponse.json() as {
     data?: {
       draftOrderCreate?: {
-        draftOrder?: { id?: string; invoiceUrl?: string };
+        draftOrder?: { id?: string; name?: string; invoiceUrl?: string };
         userErrors?: Array<{ field: string[]; message: string }>;
       };
     };
@@ -210,6 +249,11 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 
   if (userErrors.length > 0 || !draftOrderResult?.draftOrder?.invoiceUrl) {
     console.error("[api.checkout-impermeabilizador] Error GraphQL:", { userErrors, errors: gqlData.errors });
+    // §5.5 paso 3: compensar las reservas ya hechas.
+    if (pliegos.refIds.length) {
+      await anular(shop, pliegos.refIds).catch((e) =>
+        console.error("[api.checkout-impermeabilizador] Error anulando reservas tras fallo del draft:", e));
+    }
     return new Response(
       JSON.stringify({ error: "Error al crear el pedido en Shopify", detail: gqlData }),
       { status: 500, headers: corsHeaders },
@@ -219,11 +263,19 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   const checkoutUrl   = draftOrderResult.draftOrder.invoiceUrl;
   const draftOrderGid = draftOrderResult.draftOrder.id ?? "";
   const draftOrderId  = draftOrderGid.replace("gid://shopify/DraftOrder/", "");
+  const orderName     = String(draftOrderResult.draftOrder.name ?? "");
 
   console.log("[api.checkout-impermeabilizador] Draft Order creado. ID:", draftOrderId, "URL:", checkoutUrl);
 
+  // §5.5 paso 4: cruzar reserva ↔ draft order para /api/check-paid.
+  if (pliegos.refIds.length) {
+    await vincularDraftOrder(shop, pliegos.refIds, draftOrderId).catch((e) =>
+      console.error("[api.checkout-impermeabilizador] Error vinculando reservas al draft:", e));
+  }
+
   // Registrar PedidoCustom por cada item — no bloquea si falla
-  for (const item of items) {
+  for (let i = 0; i < items.length; i++) {
+    const item = items[i];
     try {
       const isImp   = item.tipo === "impermeabilizador";
       const precio  = isImp
@@ -233,8 +285,9 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       const altoDb  = isImp ? 0 : (item.alto  || 0);
       const wp      = isImp ? true : (item.waterproof ?? false);
       const tipo    = item.tipo || "medida";
+      const asignada = asignacionPorIndice.get(i);
       await sql`
-        INSERT INTO "PedidoCustom" (id, shop, "orderId", ancho, alto, waterproof, "precioTotal", estado, "productTitle", tipo, "createdAt")
+        INSERT INTO "PedidoCustom" (id, shop, "orderId", ancho, alto, waterproof, "precioTotal", estado, "productTitle", tipo, borde, "pliegoId", "pliegoCodigo", rotada, "orderName", "createdAt")
         VALUES (
           ${randomUUID()},
           ${shop},
@@ -246,9 +299,17 @@ export const action = async ({ request }: ActionFunctionArgs) => {
           'pendiente',
           ${item.productTitle ?? ""},
           ${tipo},
+          ${isImp ? null : (item.borde ?? null)},
+          ${asignada?.pliegoId ?? null},
+          ${asignada?.pliegoCodigo ?? ""},
+          ${asignada?.rotada ?? false},
+          ${orderName},
           NOW()
         )
       `;
+      if (asignada) {
+        console.log(`[api.checkout-impermeabilizador] PedidoCustom ${orderName} → pliegoCodigo=${asignada.pliegoCodigo} rotada=${asignada.rotada}`);
+      }
     } catch (insertErr) {
       console.error("[api.checkout-impermeabilizador] Error registrando PedidoCustom:", insertErr);
     }

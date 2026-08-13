@@ -14,9 +14,27 @@
  */
 
 import { neon } from "@neondatabase/serverless";
+import { randomUUID } from "node:crypto";
 
 /** Minutos que una reserva 'pendiente' ocupa stock antes de expirar (decisión 4). */
 export const RESERVA_TTL_MIN = 15;
+
+/**
+ * Bandera de despliegue (env var `PLIEGOS_MODO` en Vercel):
+ *  - `off`     — el control de stock no hace absolutamente nada. **Default.**
+ *  - `log`     — reserva y registra, pero NUNCA bloquea una venta por falta de
+ *                stock. Es el modo con el que se despliega la Fase 4.
+ *  - `bloqueo` — si no hay pliego que sirva, la venta se rechaza con 409.
+ *
+ * El default es `off` a propósito: si alguien despliega sin configurar la
+ * variable, el comportamiento es exactamente el de antes de este módulo.
+ */
+export type ModoPliegos = "off" | "log" | "bloqueo";
+
+export function modoPliegos(): ModoPliegos {
+  const v = String(process.env.PLIEGOS_MODO ?? "off").trim().toLowerCase();
+  return v === "log" || v === "bloqueo" ? v : "off";
+}
 
 const db = () => neon(process.env.DIRECT_URL ?? process.env.DATABASE_URL!);
 
@@ -590,6 +608,215 @@ export async function estadoPliegos(shop: string, reglaId: string): Promise<Plie
     activo: Boolean(f.activo),
     reservasVigentes: Number(f.reservasVigentes),
   }));
+}
+
+// ── Integración con el checkout (Fase 4) ────────────────────────────────────
+
+/** ¿Esta trama tiene pliegos cargados? Si no, el control de stock NO la afecta. */
+async function tienePliegos(shop: string, reglaId: string): Promise<boolean> {
+  const sql = db();
+  const filas = await sql`
+    SELECT 1 FROM "Pliego"
+    WHERE shop = ${shop} AND "reglaId" = ${reglaId} AND activo
+    LIMIT 1
+  `;
+  return filas.length > 0;
+}
+
+/**
+ * Resuelve la trama de cada item.
+ *
+ * Orden de preferencia:
+ *  1. `item.reglaId` — lo mandará el tema a partir de la Fase 6.
+ *  2. `item.variantId` → producto (1 llamada a Shopify para todas las variantes)
+ *     → regla que lo tenga en `productIds`.
+ *
+ * El paso 2 existe porque en la Fase 4 el tema TODAVÍA no manda `reglaId`
+ * (§2.2.2): sin él no habría nada que reservar y la fase no se podría validar
+ * con compras reales. Además sigue siendo útil después, como red para los items
+ * legacy que queden en el localStorage de clientes.
+ */
+async function resolverReglas(
+  shop: string,
+  items: ItemMedidaCheckout[],
+  accessToken: string,
+): Promise<Map<number, string>> {
+  const resuelto = new Map<number, string>();
+
+  const pendientes = items.filter((i) => {
+    if (i.reglaId) {
+      resuelto.set(i.indice, i.reglaId);
+      return false;
+    }
+    return Boolean(i.variantId);
+  });
+  if (!pendientes.length) return resuelto;
+
+  const gids = [...new Set(pendientes.map((i) =>
+    `gid://shopify/ProductVariant/${String(i.variantId).replace("gid://shopify/ProductVariant/", "")}`,
+  ))];
+
+  let variantAProducto = new Map<string, string>();
+  try {
+    const resp = await fetch(`https://${shop}/admin/api/2025-10/graphql.json`, {
+      method: "POST",
+      headers: { "X-Shopify-Access-Token": accessToken, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        query: `query($ids: [ID!]!) {
+          nodes(ids: $ids) { ... on ProductVariant { id product { id } } }
+        }`,
+        variables: { ids: gids },
+      }),
+    });
+    const data = (await resp.json()) as {
+      data?: { nodes?: Array<{ id?: string; product?: { id?: string } } | null> };
+    };
+    for (const n of data.data?.nodes ?? []) {
+      if (n?.id && n.product?.id) variantAProducto.set(n.id, n.product.id);
+    }
+  } catch (e) {
+    log("no se pudo resolver variante → producto:", (e as Error).message);
+    return resuelto;
+  }
+
+  const sql = db();
+  const reglas = await sql`
+    SELECT id, "productIds" FROM "ReglaPersonalizada"
+    WHERE shop = ${shop} AND activa = true
+  `;
+
+  for (const item of pendientes) {
+    const gid = `gid://shopify/ProductVariant/${String(item.variantId).replace("gid://shopify/ProductVariant/", "")}`;
+    const productoGid = variantAProducto.get(gid);
+    if (!productoGid) continue;
+    const numerico = productoGid.replace("gid://shopify/Product/", "");
+    const regla = (reglas as any[]).find((r) =>
+      (r.productIds as string[]).some((p) => p === productoGid || p === numerico),
+    );
+    if (regla) resuelto.set(item.indice, String(regla.id));
+  }
+
+  return resuelto;
+}
+
+export type ItemMedidaCheckout = {
+  /** Índice del item en el array original del endpoint. */
+  indice: number;
+  /** id del item de localStorage. Lo mandará el tema en la Fase 7. */
+  refId: string | null;
+  reglaId: string | null;
+  variantId: string | number | null;
+  anchoCm: number;
+  altoCm: number;
+};
+
+export type AsignacionCheckout = { indice: number; reserva: ReservaAsignada };
+
+export type ResultadoCheckoutPliegos = {
+  modo: ModoPliegos;
+  /** true → el endpoint debe abortar con 409 y NO crear el Draft Order. */
+  bloquear: boolean;
+  error: string | null;
+  asignaciones: AsignacionCheckout[];
+  /** refIds de todo lo reservado, para vincular al draft o compensar. */
+  refIds: string[];
+};
+
+/**
+ * Pasos 1 y 2 del flujo del §5.5, compartidos por los DOS endpoints de checkout
+ * (el carrito mixto rutea al de impermeabilizador — §2.2.1).
+ *
+ * Se llama ANTES de crear el Draft Order: así nunca existe una orden sin su
+ * pliego asignado. Si el draft falla después, el endpoint compensa con
+ * `anular(refIds)`.
+ *
+ * En modo `log` nunca devuelve `bloquear: true`: registra el SIN_STOCK y deja
+ * pasar la venta. Es lo que permite validar la fase con pedidos reales sin
+ * ningún riesgo comercial.
+ */
+export async function procesarCheckoutPliegos(
+  shop: string,
+  items: ItemMedidaCheckout[],
+  accessToken: string,
+): Promise<ResultadoCheckoutPliegos> {
+  const modo = modoPliegos();
+  const vacio: ResultadoCheckoutPliegos = {
+    modo, bloquear: false, error: null, asignaciones: [], refIds: [],
+  };
+
+  if (modo === "off") return vacio;
+  log(`MODO=${modo}`);
+  if (!items.length) return vacio;
+
+  const reglas = await resolverReglas(shop, items, accessToken);
+
+  // Agrupar por trama: la reconciliación y la reserva son por trama.
+  const porRegla = new Map<string, ItemMedidaCheckout[]>();
+  for (const item of items) {
+    const reglaId = reglas.get(item.indice);
+    if (!reglaId) {
+      log(`item legacy sin reglaId (indice=${item.indice}, ${item.anchoCm}x${item.altoCm}) — sin reserva`);
+      continue;
+    }
+    porRegla.set(reglaId, [...(porRegla.get(reglaId) ?? []), item]);
+  }
+  if (!porRegla.size) return vacio;
+
+  const asignaciones: AsignacionCheckout[] = [];
+  const refIds: string[] = [];
+
+  for (const [reglaId, grupo] of porRegla) {
+    if (!(await tienePliegos(shop, reglaId))) {
+      log(`trama ${reglaId} sin pliegos cargados — sin control de stock`);
+      continue;
+    }
+
+    // §3.2.2 — el único que puede sobrevender es el siguiente comprador, y es
+    // precisamente él quien dispara la reconciliación.
+    const rec = await reconciliar(shop, reglaId);
+    if (rec.revisadas) {
+      log(`reconciliación regla=${reglaId}: ${rec.confirmadas} confirmadas, ${rec.anuladas} anuladas, ${rec.sinResolver} sin resolver`);
+    }
+
+    const paraReservar: ItemReserva[] = grupo.map((i) => {
+      // Sin `item.id` del tema (llega en la Fase 7) la idempotencia queda
+      // degradada: un doble clic crearía dos reservas. Se registra para que
+      // se vea en los logs mientras dure la ventana.
+      const refId = i.refId ?? `auto_${randomUUID()}`;
+      if (!i.refId) log(`  item sin id de localStorage — refId generado ${refId} (idempotencia degradada hasta la Fase 7)`);
+      return { refId, anchoCm: i.anchoCm, altoCm: i.altoCm };
+    });
+
+    const res = await reservar(shop, reglaId, paraReservar);
+
+    if (res.ok) {
+      res.reservas.forEach((reserva, k) => {
+        asignaciones.push({ indice: grupo[k].indice, reserva });
+        refIds.push(reserva.refId);
+      });
+      continue;
+    }
+
+    // SIN_STOCK
+    if (modo === "log") {
+      log(`SIN_STOCK (MODO=log, la venta NO se bloqueó) pedido=${res.anchoCm}x${res.altoCm} regla=${reglaId}`);
+      continue;
+    }
+
+    // modo === 'bloqueo': compensar TODO lo reservado en esta petición.
+    log(`SIN_STOCK (MODO=bloqueo, se rechaza la venta) pedido=${res.anchoCm}x${res.altoCm} regla=${reglaId}`);
+    if (refIds.length) await anular(shop, refIds);
+    return {
+      modo,
+      bloquear: true,
+      error: `No tenemos material suficiente para una alfombra de ${res.anchoCm} × ${res.altoCm} cm. Prueba con otra medida.`,
+      asignaciones: [],
+      refIds: [],
+    };
+  }
+
+  log(`reservas OK: ${asignaciones.length}/${items.length} item(s) con pliego asignado`);
+  return { modo, bloquear: false, error: null, asignaciones, refIds };
 }
 
 // ── Administración (Fase 3) ─────────────────────────────────────────────────

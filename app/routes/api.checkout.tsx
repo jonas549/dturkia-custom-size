@@ -1,6 +1,12 @@
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
 import { neon } from "@neondatabase/serverless";
 import { randomUUID } from "node:crypto";
+import {
+  anular,
+  procesarCheckoutPliegos,
+  vincularDraftOrder,
+  type ItemMedidaCheckout,
+} from "../lib/pliegos.server";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -47,6 +53,10 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     variantId?: number | string | null;
     productTitle?: string | null;
     borde?: string | null;
+    // Stock por pliego (Fase 4). El tema los enviará en las Fases 6 y 7;
+    // hasta entonces el backend resuelve la trama desde variantId.
+    id?: string | null;
+    reglaId?: string | null;
   };
 
   let body: {
@@ -152,6 +162,9 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       title:    `${baseTitle} — ${item.ancho}cm × ${item.alto}cm`,
       quantity: 1,
       price:    itemPrecio.toFixed(2),
+      // ⚠️ Decisión 5: el código de pliego NO va aquí. El cliente no debe verlo
+      // y no viaja en la orden de Shopify; vive solo en PedidoCustom, que es lo
+      // que alimenta la pestaña Cortes del admin.
       properties: [
         { name: "Ancho",             value: `${item.ancho} cm` },
         { name: "Alto",              value: `${item.alto} cm` },
@@ -179,6 +192,30 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     );
   }
 
+  // ── Stock por pliego (§5.5 pasos 1-2) — ANTES de crear el Draft Order ─────
+  // Reservar antes significa que nunca existe una orden sin su pliego asignado.
+  // Va después del chequeo de token: si el token está revocado no tiene sentido
+  // dejar material ocupado 15 minutos por una venta que no va a ocurrir.
+  const itemsMedida: ItemMedidaCheckout[] = customItems.map((item, indice) => ({
+    indice,
+    refId: item.id ?? null,
+    reglaId: item.reglaId ?? null,
+    variantId: item.variantId ?? null,
+    anchoCm: Number(item.ancho),
+    altoCm: Number(item.alto),
+  }));
+
+  const pliegos = await procesarCheckoutPliegos(shop, itemsMedida, accessToken);
+
+  if (pliegos.bloquear) {
+    return new Response(
+      JSON.stringify({ error: pliegos.error, motivo: "SIN_STOCK" }),
+      { status: 409, headers: corsHeaders },
+    );
+  }
+
+  const asignacionPorIndice = new Map(pliegos.asignaciones.map((a) => [a.indice, a.reserva]));
+
   console.log("[api.checkout] Creando draft order para shop:", shop, "custom items:", customItems.length);
 
   const shopifyResponse = await fetch(
@@ -194,12 +231,18 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   );
 
   const shopifyData = await shopifyResponse.json() as {
-    draft_order?: { invoice_url?: string; id?: number };
+    draft_order?: { invoice_url?: string; id?: number; name?: string };
     errors?: unknown;
   };
 
   if (!shopifyResponse.ok || !shopifyData.draft_order?.invoice_url) {
     console.error("[api.checkout] Error de Shopify:", shopifyData);
+    // §5.5 paso 3: compensar las reservas — si no, ocuparían stock 15 min por
+    // una venta que nunca existió.
+    if (pliegos.refIds.length) {
+      await anular(shop, pliegos.refIds).catch((e) =>
+        console.error("[api.checkout] Error anulando reservas tras fallo del draft:", e));
+    }
     return new Response(
       JSON.stringify({ error: "Error al crear el pedido en Shopify", detail: shopifyData }),
       { status: 500, headers: corsHeaders },
@@ -208,15 +251,25 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 
   const checkoutUrl = shopifyData.draft_order.invoice_url;
   const draftOrderId = String(shopifyData.draft_order.id ?? "");
+  const orderName = String(shopifyData.draft_order.name ?? "");
 
   console.log("[api.checkout] Draft order creado. ID:", draftOrderId, "URL:", checkoutUrl);
 
+  // §5.5 paso 4: cruzar reserva ↔ draft order para que /api/check-paid pueda
+  // confirmarla cuando el cliente pague.
+  if (pliegos.refIds.length) {
+    await vincularDraftOrder(shop, pliegos.refIds, draftOrderId).catch((e) =>
+      console.error("[api.checkout] Error vinculando reservas al draft:", e));
+  }
+
   // Registrar un PedidoCustom por cada item — no bloquea el checkout si falla
-  for (const item of customItems) {
+  for (let i = 0; i < customItems.length; i++) {
+    const item = customItems[i];
     const itemPrecio = (item.precio || 0) + (item.waterproof && item.waterproofPrecio ? item.waterproofPrecio : 0);
+    const asignada = asignacionPorIndice.get(i);
     try {
       await sql`
-        INSERT INTO "PedidoCustom" (id, shop, "orderId", ancho, alto, waterproof, "precioTotal", estado, "productTitle", borde, "createdAt")
+        INSERT INTO "PedidoCustom" (id, shop, "orderId", ancho, alto, waterproof, "precioTotal", estado, "productTitle", borde, "pliegoId", "pliegoCodigo", rotada, "orderName", "createdAt")
         VALUES (
           ${randomUUID()},
           ${shop},
@@ -228,9 +281,16 @@ export const action = async ({ request }: ActionFunctionArgs) => {
           'pendiente',
           ${item.productTitle ?? ""},
           ${item.borde ?? null},
+          ${asignada?.pliegoId ?? null},
+          ${asignada?.pliegoCodigo ?? ""},
+          ${asignada?.rotada ?? false},
+          ${orderName},
           NOW()
         )
       `;
+      if (asignada) {
+        console.log(`[api.checkout] PedidoCustom ${orderName} → pliegoCodigo=${asignada.pliegoCodigo} rotada=${asignada.rotada}`);
+      }
     } catch (insertErr) {
       console.error("[api.checkout] Error registrando PedidoCustom:", insertErr);
     }
