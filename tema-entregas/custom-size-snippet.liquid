@@ -64,6 +64,12 @@
       </div>
     </div>
 
+    <!-- Stock por pliego: aviso de medida no disponible / trama agotada.
+         Va JUSTO DEBAJO DE LOS SLIDERS, que es donde el cliente está mirando
+         mientras ajusta la medida. El JS además lo reubica aquí en tiempo de
+         ejecución por si el markup del tema quedara en otro orden. -->
+    <p id="csw-stock" class="csw-stock" style="display:none"></p>
+
     <!-- Impermeabilizador — Propuesta B; display toggled by JS -->
     <div id="csw-waterproof-section" style="display:none">
       <label id="csw-wf-label" class="csw-wf" for="csw-waterproof">
@@ -101,8 +107,6 @@
 
     <button id="csw-agregar" class="csw-btn" type="button">Agregar a la bolsa</button>
     <p id="csw-error" class="csw-error" style="display:none"></p>
-    <!-- Stock por pliego (Fase 6): aviso de medida no disponible / trama agotada -->
-    <p id="csw-stock" class="csw-stock" style="display:none"></p>
   </div>
 </div>
 
@@ -580,16 +584,25 @@
     text-align: center;
   }
 
-  /* Stock por pliego (Fase 6) */
-  .csw-stock {
-    margin-top: 10px;
+  /* Stock por pliego — aviso bajo los sliders.
+     Va con #csw-root delante a propósito: el tema define
+     `.product .description p { line-height:1.9em; padding-bottom:20px }`, que
+     por especificidad le ganaría a una clase suelta y descuadraría la caja. */
+  #csw-root .csw-stock {
+    display: block;
+    margin: 2px 0 20px;
+    padding: 11px 14px;
+    box-sizing: border-box;
     font-size: var(--f12, 0.75em);
+    line-height: 1.45;
+    text-align: left;
     color: var(--rojo, #d2451e);
-    text-align: center;
-    line-height: 1.4;
+    background: #fdf2ee;
+    border: 1px solid rgba(210, 69, 30, 0.35);
+    border-left-width: 3px;
   }
 
-  .csw-stock--agotado {
+  #csw-root .csw-stock--agotado {
     font-weight: 700;
     letter-spacing: 0.5px;
     text-transform: uppercase;
@@ -653,35 +666,80 @@
     document.documentElement.classList.remove('csw-natives-hidden');
   }
 
-  /* ─── Stock por pliego (Fase 6) ────────────────────────────────────────────
-     El límite real NO son "ancho máximo" y "largo máximo" por separado, sino el
-     PAR (ancho, largo) conjuntamente: una pieza puede caber en un rollo y no en
-     otro aunque ambas dimensiones "alcancen" por separado.
+  /* ─── Stock por pliego — ESCALONES POR ANCHO DE ROLLO ──────────────────────
+     Cada ancho de rollo que existe en la trama define un ESCALÓN. Un pedido se
+     asigna al escalón del PRIMER ancho de rollo >= al ancho pedido, y solo
+     puede cortarse de rollos de ESE ancho exacto. Un escalón sin material NO
+     toma prestado del escalón de arriba: con anchos {100, 300, 400}, un pedido
+     de 250 cm de ancho se bloquea si los rollos de 300 están sin largo, aunque
+     los de 400 estén llenos.
 
-     `capacidades` llega de /api/precio como [{anchoCm, largoMaxCm}]:
-       · undefined → la trama no tiene pliegos cargados → SIN control de stock,
-                     el widget se comporta exactamente como antes.
-       · []        → tiene pliegos pero no queda material → AGOTADO.
-       · [...]     → se valida el par en cada movimiento de slider.
+     `capacidades` llega de /api/precio como [{anchoCm, largoMaxCm}] y es LA
+     ESCALERA de anchos de rollo, no "lo vendible": los anchos sin material
+     viajan con largoMaxCm 0 porque hacen falta para calcular el escalón.
+       · undefined                  → la trama no tiene pliegos cargados → SIN
+                                      control de stock, el widget se comporta
+                                      exactamente como antes.
+       · ningún largoMaxCm > 0      → no queda material → AGOTADO.
+       · con material               → se valida el par en cada movimiento.
 
-     Se evalúan las DOS orientaciones porque la alfombra puede cortarse rotada.
-     Esto es solo un filtro de UX: el checkout revalida siempre, el frontend
-     nunca es autoridad sobre el stock.
+     Se evalúan las DOS orientaciones porque la alfombra puede cortarse rotada,
+     y cada una usa el escalón del lado que va A LO ANCHO DEL ROLLO. Es
+     simétrico: 250×350 y 350×250 son la misma pieza y dan la misma respuesta.
+
+     ⚠️ Esta lógica es la MISMA que `escalonPara()`/`factible()` de
+     app/lib/pliegos.server.ts. Si se cambia una, hay que cambiar la otra o el
+     widget y el checkout se contradicen. Aun así el checkout revalida siempre:
+     el frontend nunca es autoridad sobre el stock.
   --------------------------------------------------------------------------- */
-  function cabeEnCapacidades(anchoCm, altoCm, capacidades) {
-    if (!capacidades || !capacidades.length) return false;
+  function escalonPara(medidaCm, capacidades) {
+    var mejor = null;
     for (var i = 0; i < capacidades.length; i++) {
       var c = capacidades[i];
-      var normal = (c.anchoCm >= anchoCm && c.largoMaxCm >= altoCm);
-      var rotada = (c.anchoCm >= altoCm  && c.largoMaxCm >= anchoCm);
-      if (normal || rotada) return true;
+      if (c.anchoCm >= medidaCm && (mejor === null || c.anchoCm < mejor.anchoCm)) mejor = c;
+    }
+    return mejor;   /* null = no existe ningún ancho de rollo >= a la medida */
+  }
+
+  function hayMaterial(capacidades) {
+    if (!capacidades) return false;
+    for (var i = 0; i < capacidades.length; i++) {
+      if (capacidades[i].largoMaxCm > 0) return true;
     }
     return false;
+  }
+
+  function cabeEnCapacidades(anchoCm, altoCm, capacidades) {
+    if (!capacidades || !capacidades.length) return false;
+    var normal = escalonPara(anchoCm, capacidades);   /* consume altoCm de largo */
+    var rotada = escalonPara(altoCm,  capacidades);   /* consume anchoCm de largo */
+    if (normal && normal.largoMaxCm >= altoCm)  return true;
+    if (rotada && rotada.largoMaxCm >= anchoCm) return true;
+    return false;
+  }
+
+  /* El aviso tiene que salir DEBAJO DE LOS SLIDERS, que es donde el cliente
+     está mirando mientras ajusta la medida — no pegado al botón, que puede
+     quedar fuera de pantalla. Se reubica en tiempo de ejecución en vez de
+     confiar en el orden del markup: si el snippet del tema quedó con otra
+     disposición, esto lo corrige igual. Se hace una sola vez. */
+  var stockReubicado = false;
+  function colocarAvisoStock() {
+    if (stockReubicado) return;
+    var el = eid('csw-stock');
+    var alto = eid('csw-alto');
+    if (!el || !alto) return;
+    var grupo = alto.parentNode;                 /* .csw-slider-group del alto */
+    if (grupo && grupo.parentNode) {
+      grupo.parentNode.insertBefore(el, grupo.nextSibling);
+      stockReubicado = true;
+    }
   }
 
   function mostrarStock(msg, esAgotado) {
     var el = eid('csw-stock');
     if (!el) return;
+    colocarAvisoStock();
     if (!msg) { el.style.display = 'none'; el.textContent = ''; return; }
     el.textContent = msg;
     el.className = 'csw-stock' + (esAgotado ? ' csw-stock--agotado' : '');
@@ -862,7 +920,10 @@
         var reglaId          = data.reglaId || '';
         var capacidades      = data.capacidades;              /* puede ser undefined */
         var controlDeStock   = Array.isArray(capacidades);    /* false = trama sin pliegos */
-        var tramaAgotada     = controlDeStock && capacidades.length === 0;
+        /* Agotada = ningún escalón con material. Ya NO basta con mirar si el
+           arreglo viene vacío: ahora también viajan los anchos secos (con
+           largoMaxCm 0) porque son los que definen la escalera. */
+        var tramaAgotada     = controlDeStock && !hayMaterial(capacidades);
 
         var sAncho   = eid('csw-ancho');
         var sAlto    = eid('csw-alto');

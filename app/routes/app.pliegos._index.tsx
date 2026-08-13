@@ -14,10 +14,12 @@ import { authenticate } from "../shopify.server";
 import prisma from "../db.server";
 import {
   capacidades,
+  escalones,
   estadoPliegos,
   reconciliar,
   RESERVA_TTL_MIN,
   type Capacidad,
+  type Escalon,
   type PliegoEstado,
 } from "../lib/pliegos.server";
 
@@ -46,7 +48,10 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   for (const r of reglas) {
     const pliegos = await estadoPliegos(shop, r.id);
     if (!pliegos.length) {
-      tramas.push({ ...r, sinPliegos: true, pliegos: [], caps: [] as Capacidad[], resumen: null });
+      tramas.push({
+        ...r, sinPliegos: true, pliegos: [], caps: [] as Capacidad[],
+        escalonesLista: [] as Escalon[], resumen: null,
+      });
       continue;
     }
 
@@ -64,6 +69,9 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       sinPliegos: false,
       pliegos: finales,
       caps,
+      // La escalera se arma en el loader: `escalones()` vive en un módulo
+      // .server y no puede llamarse desde el render del componente.
+      escalonesLista: escalones(caps),
       resumen: {
         totalRollos: finales.length,
         rollosActivos: activos.length,
@@ -72,7 +80,10 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
         totalCm: activos.reduce((a, p) => a + p.largoTotalCm, 0),
         reservasVigentes: finales.reduce((a, p) => a + p.reservasVigentes, 0),
         // Con rotación, el mayor lado vendible puede ser el largo de un rollo.
-        mayorLadoCm: caps.reduce((mx, c) => Math.max(mx, c.anchoCm, c.largoMaxCm), 0),
+        // Solo cuentan los escalones CON material: uno seco no vende nada.
+        mayorLadoCm: caps
+          .filter((c) => c.largoMaxCm > 0)
+          .reduce((mx, c) => Math.max(mx, c.anchoCm, c.largoMaxCm), 0),
         casiAgotados: finales.filter(esCasiAgotado).map((p) => p.codigo),
         agotados: finales.filter((p) => p.activo && p.disponibleCm <= 0).map((p) => p.codigo),
       },
@@ -190,24 +201,29 @@ export default function PliegosIndex() {
                 </p>
               </div>
 
-              {/* Capacidades — el límite real es el PAR (§2.3) */}
+              {/* Escalones — cada ancho de rollo es un escalón cerrado (§5.0) */}
               <div style={{ marginTop: 14 }}>
                 <div style={{ fontSize: 12, fontWeight: 600, color: "#6d7175", marginBottom: 6 }}>
-                  MEDIDAS VENDIBLES POR ANCHO DE ROLLO
+                  ESCALONES POR ANCHO DE ROLLO
                 </div>
-                {r.casiAgotados.length === 0 && t.caps.length === 0 ? (
+                {!t.caps.some((c) => c.largoMaxCm > 0) ? (
                   <span style={chip("#fde8e8", "#8f1c1c")}>AGOTADA — sin capacidad</span>
                 ) : (
-                  t.caps.map((c) => (
-                    <span key={c.anchoCm} style={chip("#f1f8ff", "#0070c4")}>
-                      ancho ≤ {c.anchoCm} cm → largo ≤ {m(c.largoMaxCm)}
+                  t.escalonesLista.map((e) => (
+                    <span
+                      key={e.hastaCm}
+                      style={e.largoMaxCm > 0 ? chip("#f1f8ff", "#0070c4") : chip("#fde8e8", "#8f1c1c")}
+                    >
+                      ancho {e.desdeCm}–{e.hastaCm} cm →{" "}
+                      {e.largoMaxCm > 0 ? `largo ≤ ${m(e.largoMaxCm)}` : "SIN MATERIAL"}
                     </span>
                   ))
                 )}
                 <p style={{ fontSize: 12, color: "#6d7175", margin: "6px 0 0" }}>
-                  El límite real es el <strong>par</strong> (ancho, largo), no cada dimensión por
-                  separado: una pieza puede caber en un rollo y no en otro aunque ambos «alcancen».
-                  Se evalúan las dos orientaciones.
+                  Un pedido solo puede cortarse de rollos de <strong>su</strong> escalón: si el
+                  escalón está sin material, la venta se bloquea aunque queden rollos más anchos.
+                  El límite real es el <strong>par</strong> (ancho, largo), y se evalúan las dos
+                  orientaciones — cada una contra el escalón del lado que va a lo ancho del rollo.
                 </p>
               </div>
 

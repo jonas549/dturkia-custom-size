@@ -20,6 +20,7 @@ import {
   cambiarActivo,
   capacidades,
   cortesDeTrama,
+  escalones,
   estadoPliegos,
   movimientosDeTrama,
   prefijoSugerido,
@@ -49,7 +50,8 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
   return {
     regla,
     pliegos,
-    caps,
+    // `escalones()` vive en un módulo .server: se arma aquí, no en el render.
+    escalonesLista: escalones(caps),
     reservas,
     cortes,
     movimientos,
@@ -171,7 +173,7 @@ const fecha = (iso: string) =>
   new Date(iso).toLocaleString("es-CL", { day: "2-digit", month: "2-digit", year: "2-digit", hour: "2-digit", minute: "2-digit" });
 
 export default function GestionTrama() {
-  const { regla, pliegos, caps, reservas, cortes, movimientos, prefijo, ttl } =
+  const { regla, pliegos, escalonesLista, reservas, cortes, movimientos, prefijo, ttl } =
     useLoaderData<typeof loader>();
   const data = useActionData<typeof action>();
   const nav = useNavigation();
@@ -408,10 +410,17 @@ export default function GestionTrama() {
                 </div>
               )}
 
-              {caps.length > 0 && (
+              {escalonesLista.length > 0 && (
                 <p style={{ fontSize: 12, color: "#6d7175", marginTop: 14 }}>
-                  <strong>Capacidad actual:</strong>{" "}
-                  {caps.map((c) => `ancho ≤ ${c.anchoCm} cm → largo ≤ ${m(c.largoMaxCm)}`).join("  ·  ")}
+                  <strong>Escalones actuales:</strong>{" "}
+                  {escalonesLista
+                    .map((e) => `ancho ${e.desdeCm}–${e.hastaCm} cm → ${
+                      e.largoMaxCm > 0 ? `largo ≤ ${m(e.largoMaxCm)}` : "SIN MATERIAL"
+                    }`)
+                    .join("  ·  ")}
+                  <br />
+                  Un pedido solo puede cortarse de rollos de <strong>su</strong> escalón: si su
+                  escalón está sin material, no se vende aunque queden rollos más anchos.
                 </p>
               )}
             </div>

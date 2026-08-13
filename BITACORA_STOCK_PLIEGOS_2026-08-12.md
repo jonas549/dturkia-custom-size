@@ -2,7 +2,7 @@
 
 **Proyecto:** dturkia-custom-size (D'Turkia · `dturkia.myshopify.com`)
 **Iniciada:** 2026-08-12
-**Estado:** ✅ **Fases 1-7 COMPLETADAS** — falta pegar los 2 archivos del tema y activar `PLIEGOS_MODO`. Siguiente: Fase 8 (activación + QA)
+**Estado:** ✅ **Fases 1-7 COMPLETADAS** + **cambio a escalones por ancho de rollo ([§5.0](#50-escalones-por-ancho-de-rollo))** — falta pegar los 2 archivos del tema y activar `PLIEGOS_MODO`. Siguiente: Fase 8 (activación + QA)
 **Última actualización:** 2026-08-13
 
 > ### ⚠️ LEER ANTES DE TOCAR NADA — sobre "Ceniza"
@@ -37,6 +37,7 @@
 3. [Decisiones cerradas](#3-decisiones-cerradas)
 4. [Modelo de datos](#4-modelo-de-datos)
 5. [Lógica de selección y reserva](#5-lógica-de-selección-y-reserva)
+   · [5.0 Escalones por ancho de rollo](#50-escalones-por-ancho-de-rollo) 🔶
 6. [Plan de ataque — Fases 1 a 8](#6-plan-de-ataque--fases-1-a-8)
 7. [Riesgos y mitigaciones](#7-riesgos-y-mitigaciones)
 8. [Registro de avance](#8-registro-de-avance)
@@ -67,7 +68,10 @@ ganar largo.
 
 ### 1.3 Reglas físicas del corte
 
-- **El ancho manda:** una alfombra solo cabe en un pliego cuyo ancho sea `>=` al ancho requerido.
+- **El ancho manda, POR ESCALONES:** una alfombra no se corta de cualquier pliego más ancho, sino
+  **solo de los pliegos del primer ancho `>=` al requerido** (ver [§5.0](#50-escalones-por-ancho-de-rollo)).
+  Un pedido de 250 cm sale de los rollos de 300, nunca de los de 400, ni siquiera si los de 300 se
+  quedaron sin largo.
 - **El largo se descuenta** del pliego elegido.
 - El **retazo de ancho** que sobra (diferencia entre el ancho del pliego y el ancho pedido) se
   **ignora: es merma**, no se reutiliza.
@@ -359,14 +363,79 @@ orderName    String  @default("")   // "#D1042" — para cruzar orden ↔ pliego
 
 ## 5. Lógica de selección y reserva
 
+### 5.0 ESCALONES POR ANCHO DE ROLLO
+
+> **Cambio de lógica de negocio del 2026-08-13 (posterior a la Fase 7).** Corrige la regla con la que
+> se implementaron las Fases 2 a 7, que era *"sirve cualquier rollo de ancho mayor o igual"*.
+
+**Cada ancho de rollo que existe en la trama define un escalón.** Un pedido se asigna al escalón del
+**primer ancho de rollo `>=` al ancho requerido**, y **solo puede cortarse de rollos de ESE ancho
+exacto**.
+
+```
+escalon(x) = MIN("anchoCm") de los pliegos ACTIVOS de la trama con "anchoCm" >= x
+```
+
+Con los anchos de `Alfombra test 2` ({100, 300, 400}):
+
+| Ancho pedido | Escalón | Rollos que puede usar |
+|---|---|---|
+| 1–100 | 100 | solo los de 100 |
+| 101–300 | 300 | solo los de 300 |
+| 301–400 | 400 | solo los de 400 |
+| 401+ | — | ninguno (en esa orientación) |
+
+**Los escalones no están escritos en ninguna parte: se derivan de los anchos que existan.** Si mañana
+entra un rollo de 200, aparece el escalón 101–200 y el de 300 pasa a ser 201–300, sin tocar código.
+
+#### La consecuencia que motiva el cambio
+
+**Un escalón sin material NO toma prestado del escalón de arriba.** Con los rollos de 300 en 70 cm y
+los de 400 llenos:
+
+- ancho 301–400 → **se vende** (su escalón es el 400, que tiene material).
+- ancho 250 → **NO se vende**, aunque sobre rollo de 400.
+- si además se agotara el 400: ni 250 ni 350 se venden, pero **ancho ≤ 100 se sigue vendiendo**,
+  porque su escalón es otro.
+
+#### Por qué un ancho agotado sigue apareciendo en `capacidades()`
+
+`capacidades()` devuelve **la escalera completa**, incluidos los anchos con `largoMaxCm: 0`. No es
+"lo que se puede vender", es la lista de peldaños. Si un ancho seco desapareciera del arreglo, el
+escalón se recalcularía sobre el siguiente ancho y un pedido de 250 **volvería a saltar al rollo de
+400** — justo lo que esta regla prohíbe.
+
+Consecuencia: **"Agotado" ya no se detecta con `capacidades: []`**, sino con "ningún peldaño con
+`largoMaxCm > 0`" (`hayMaterial()`). Un ancho desaparece de la escalera **solo si se da de baja el
+último rollo de ese ancho**; agotarlo no lo borra.
+
+#### Rotación × escalones (decisión de Jonas, 2026-08-13)
+
+**Cada orientación se valida contra el escalón del lado que va A LO ANCHO DEL ROLLO**, no contra el
+"ancho pedido" del formulario:
+
+| Orientación | Escalón que le aplica | Consume de largo |
+|---|---|---|
+| Normal | `escalon(ancho)` | `alto` |
+| Rotada | `escalon(alto)` | `ancho` |
+
+Es **simétrico en (ancho, alto)**: 250×350 y 350×250 son la misma pieza física, con la misma merma de
+ancho de rollo, y el sistema responde lo mismo a las dos. Ejemplo real con el inventario actual:
+**250×350 se vende girada en un rollo de 400** (350 va a lo ancho → escalón 400, merma 50, consume
+250 de largo), mientras que 250×200 se bloquea (ambos lados caen en el escalón 300, que está seco).
+
+> **La alternativa que se descartó:** que el escalón lo fijara siempre el *ancho pedido*. Rompía la
+> simetría — 350×250 se vendería y 250×350 no, siendo la misma alfombra y la misma merma. Se rechazó
+> por eso.
+
 ### 5.1 Las dos orientaciones (decisión 1)
 
 Se evalúan ambas y **compiten entre sí en una sola lista de candidatos**:
 
 | Orientación | Requiere pliego con | Consume de largo |
 |---|---|---|
-| Normal | `anchoCm >= ancho` | `alto` |
-| Rotada | `anchoCm >= alto` | `ancho` |
+| Normal | `anchoCm = escalon(ancho)` | `alto` |
+| Rotada | `anchoCm = escalon(alto)` | `ancho` |
 
 ### 5.2 Criterio de selección (`ORDER BY`)
 
@@ -385,6 +454,11 @@ Se evalúan ambas y **compiten entre sí en una sola lista de candidatos**:
 > **Nota sobre los criterios 1 y 2:** en el caso sin rotación son equivalentes
 > (`anchoRequerido` es constante, ordenar por `anchoCm − const` == ordenar por `anchoCm`).
 > Solo se diferencian al comparar candidatos de **orientaciones distintas**.
+
+> **Con escalones (§5.0) el criterio 1 pasa a decidir casi solo entre las dos orientaciones:**
+> dentro de una orientación el escalón ya fijó un único ancho posible, así que todos sus candidatos
+> tienen la misma merma y el desempate lo hacen los criterios 3 y 4 (rollo más gastado, luego
+> código). El `ORDER BY` no se tocó: sigue siendo correcto tal cual.
 
 ### 5.3 Verificación del criterio con datos de Ceniza
 
@@ -416,7 +490,13 @@ WITH cand AS (
                      (${alto}, ${ancho}, true))           -- orientación rotada
              AS o("anchoReq", largo, rotada)
   WHERE p.shop = ${shop} AND p."reglaId" = ${reglaId} AND p.activo
-    AND p."anchoCm" >= o."anchoReq"
+    -- ↓↓↓ ESCALONES (2026-08-13): el rollo tiene que ser del PRIMER ancho >= al
+    -- requerido, no de cualquiera más ancho. NULL (sin ancho suficiente) → sin match.
+    AND p."anchoCm" = (
+          SELECT MIN(p2."anchoCm") FROM "Pliego" p2
+          WHERE p2.shop = ${shop} AND p2."reglaId" = ${reglaId} AND p2.activo
+            AND p2."anchoCm" >= o."anchoReq"
+        )
     -- ↓↓↓ CORREGIDO EN FASE 2: el filtro de largo va AQUÍ, antes del ORDER BY/LIMIT
     AND p."largoRestanteCm" - COALESCE((
           SELECT SUM(r2."largoCm") FROM "ReservaPliego" r2
@@ -1061,6 +1141,75 @@ Copia versionada en `dturkia-custom-size/tema-entregas/functions.js`.
 
 ---
 
+### 🔶 CAMBIO DE LÓGICA — Escalones por ancho de rollo (2026-08-13, tras la Fase 7)
+
+Cambio de **regla de negocio**, no corrección de un bug: la implementación de las Fases 2–7 hacía
+*"sirve cualquier rollo de ancho mayor o igual"*, y el negocio funciona por **escalones cerrados**
+(§5.0). Se cambió en los **tres** sitios a la vez, porque si el widget, el motor y el checkout no
+comparten exactamente la misma regla, se contradicen entre ellos.
+
+**Archivos tocados**
+
+| Archivo | Qué cambió |
+|---|---|
+| `app/lib/pliegos.server.ts` | `p."anchoCm" >= o."anchoReq"` → `= (SELECT MIN(...) …)` en la sentencia atómica · `capacidades()` deja de filtrar los anchos secos (`HAVING > 0` fuera, `GREATEST(…,0)` dentro) · nuevas `escalonPara()`, `escalones()`, `hayMaterial()` · `factible()` reescrita por escalones · logs `[PLIEGOS]` muestran el escalón de cada orientación |
+| `app/routes/api.precio.tsx` | "Agotado" pasa de `capacidades.length === 0` a `!hayMaterial()` · el tope físico híbrido se calcula **solo** sobre escalones con material |
+| `app/routes/app.pliegos._index.tsx` | Chips de capacidad → **escalones** (`ancho 101–300 cm → …` / `SIN MATERIAL` en rojo) · "mayor lado vendible" solo sobre escalones con material |
+| `app/routes/app.pliegos.$reglaId.tsx` | Igual, en la línea de capacidad de la pestaña Pliegos |
+| `app/routes/app.pliegos.debug.tsx` | Muestra la escalera completa además del `capacidades()` crudo |
+| `tema-entregas/custom-size-snippet.liquid` 🔶 | La regla de escalones en JS + el aviso movido bajo los sliders (ver changelog abajo) |
+
+`functions.js` **no se tocó**: su contrato (`id`, `reglaId`, leer el error del servidor) no cambia.
+
+**Lo que NO se tocó:** fórmulas de precio, reservas, expiración de 15 min, confirmación al pagar,
+`PLIEGOS_MODO`, alta/ajuste/baja, pestañas Reservas · Cortes · Movimientos, `ORDER BY` del selector,
+`FOR UPDATE OF p SKIP LOCKED` e idempotencia por `refId`.
+
+#### Changelog del snippet (Fase 6 revisada) — por bloque
+
+| # | Dónde | Qué cambió |
+|---|---|---|
+| 1 | HTML, tras el `.csw-slider-group` del **alto** | Aquí vive ahora `<p id="csw-stock">`, antes del bloque del impermeabilizador |
+| 2 | HTML, tras `#csw-agregar` | De ahí se **quitó** el `<p id="csw-stock">` (el botón sigue deshabilitándose igual) |
+| 3 | `<style>` | `.csw-stock` reescrita: caja con fondo, borde izquierdo y `margin-bottom` 20px. Va prefijada con `#csw-root` porque el tema define `.product .description p { line-height:1.9em; padding-bottom:20px }` y por especificidad le ganaría |
+| 4 | JS, zona de stock | Nuevas `escalonPara()` y `hayMaterial()`; `cabeEnCapacidades()` reescrita por escalones |
+| 5 | JS, antes de `mostrarStock()` | Nueva `colocarAvisoStock()`: reubica el aviso bajo los sliders **en runtime**, una sola vez. Es una red por si el snippet vivo del tema tiene otro orden de markup |
+| 6 | JS, `.then` de `/api/precio` | `tramaAgotada` pasa de `capacidades.length === 0` a `!hayMaterial(capacidades)` |
+
+#### Validación ejecutada (2026-08-13)
+
+**Motor, contra la base real**, ejecutando `pliegos.server.ts` de verdad (reserva y borra el rastro).
+Inventario del momento: 100→2100 · **300→70** · 400→2010.
+
+| Caso | Resultado |
+|---|---|
+| 250×200 · 250×2000 · 299×200 | ✅ **SIN_STOCK** — el escalón 300 seco no salta al 400 (antes reservaba CEN-400) |
+| 350×300 · 400×300 · 301×900 | ✅ CEN-400 — el escalón con material sí vende |
+| 100×300 · 50×50 · 90×2000 | ✅ CEN-100 — el escalón de abajo sigue intacto |
+| 250×350 | ✅ CEN-400 **ROTADA**, consume 250 (350 va a lo ancho → escalón 400) |
+| 350×250 | ✅ CEN-400 — simétrico del anterior |
+| 401×100 | ✅ CEN-100 ROTADA, consume 401, merma 0 |
+| 350×2100 · 2200×2200 | ✅ SIN_STOCK — sin escalón por ningún lado |
+| `factible()` vs. motor | ✅ **coinciden en los 14 casos** — widget y checkout no pueden contradecirse |
+
+**Matriz de la Fase 2, con inventario completo** (11 pliegos sembrados en la regla `…w7aeerly` y
+borrados al terminar): 100×300 → VRF-100-01 · 350×400 → VRF-400-01 ROTADA · 250×350 → VRF-300-01 ·
+350×2100 → SIN_STOCK · idempotencia ✅ · 4×(90×2000) → 4 rollos distintos ✅ · todo-o-nada ✅.
+**Ningún caso ya validado cambió de resultado.**
+
+**Snippet:** `node --check` de los dos bloques `<script>` ✅ · `cabeEnCapacidades()` **extraída del
+archivo real** y corrida contra los mismos 14 casos → idéntica al motor ✅ · orden del markup
+verificado (aviso tras el slider de alto, antes del impermeabilizador) ✅.
+
+**Estado de la base tras validar:** 11 pliegos · 13 659 cm · 0 reservas pendientes · sin rastro.
+
+> ⚠️ **Ventana de inconsistencia hasta que Jonas pegue el snippet:** con el backend nuevo y el
+> snippet viejo en el tema, el widget seguiría ofreciendo el salto de escalón y el checkout lo
+> rechazaría. Hoy es inocuo porque `PLIEGOS_MODO` no existe en Vercel (= `off`), pero **el snippet
+> debe pegarse antes de poner `log` o `bloqueo`.**
+
+---
+
 ### FASE 8 — Activación y QA end-to-end
 
 **Qué se hace:** `PLIEGOS_MODO=bloqueo`; eliminar `/app/pliegos/debug`; cargar el inventario real de
@@ -1142,12 +1291,12 @@ registrado en `MovimientoPliego` con nota obligatoria. Es **corregible, no autom
 
 | | |
 |---|---|
-| **Fase actual** | ✅ **Fases 1-7 COMPLETADAS** (2026-08-13). Todo el código está en producción; falta activarlo. |
+| **Fase actual** | ✅ **Fases 1-7 COMPLETADAS** (2026-08-13) + **cambio de lógica a escalones** (§5.0). Todo el código está en producción; falta activarlo. |
 | **Bloqueantes** | Ninguno. |
-| **Acción pendiente de Jonas (2 cosas)** | **(a)** Pegar en el editor de temas de Shopify: `snippets/custom-size-snippet.liquid` y `assets/functions.js` (copias en `tema-entregas/`). **(b)** Crear `PLIEGOS_MODO=log` en Vercel → Settings → Environment Variables → Production, y redeploy. |
+| **Acción pendiente de Jonas (2 cosas)** | **(a)** Pegar en el editor de temas de Shopify: `snippets/custom-size-snippet.liquid` (**versión con escalones — la anterior quedó obsoleta**) y `assets/functions.js` (copias en `tema-entregas/`; `functions.js` no cambió con el paso a escalones). **(b)** Crear `PLIEGOS_MODO=log` en Vercel → Settings → Environment Variables → Production, y redeploy. |
 | **Estado si no se hace nada** | Con `PLIEGOS_MODO` sin definir el modo es `off`: el control de stock no hace absolutamente nada y la tienda se comporta igual que antes. Nada está activo por accidente. |
-| **Datos en producción** | 11 pliegos · 23110 cm · colgados de `Alfombra test 2` (`cmoipz5lp0000l704zvl3nx6h`, topes 400×2100 cm) · 11 `MovimientoPliego` motivo `alta` · 0 reservas |
-| **Pendiente de QA** | En `MODO=log`: slider bloqueando `350×2100`, compra pagada, compra abandonada, y carrito mixto. Logs `[PLIEGOS]` en Vercel + pestañas Reservas y Cortes. |
+| **Datos en producción** | 11 pliegos colgados de `Alfombra test 2` (`cmoipz5lp0000l704zvl3nx6h`, topes 400×2100 cm) · **13 659 cm restantes** tras las compras de prueba de Jonas (100→2100×4 · **300→70×4** · 400→959/2010/2010) · 5 reservas `confirmada` · escalones vigentes: **1–100 → 2100 · 101–300 → 70 · 301–400 → 2010** |
+| **Pendiente de QA** | En `MODO=log`: **ancho 250 debe bloquearse** (su escalón está en 70 cm) mientras 301–400 sigue vendiendo, slider bloqueando `350×2100`, compra pagada, compra abandonada, y carrito mixto. Logs `[PLIEGOS]` en Vercel + pestañas Reservas y Cortes. |
 | **Siguiente entregable** | **Fase 8** (no arrancada, se hace con Jonas): `PLIEGOS_MODO=bloqueo`, eliminar `/app/pliegos/debug`, y la matriz de QA end-to-end del plan. |
 
 ### Historial
@@ -1169,6 +1318,8 @@ registrado en `MovimientoPliego` con nota obligatoria. Es **corregible, no autom
 | 2026-08-13 | **5** | ✅ **FASE 5 COMPLETADA** — `/api/precio` devuelve `reglaId` + `capacidades` + topes híbridos | Aditivo y envuelto en try/catch: el stock nunca tumba el precio. **Corregidos los topes de `Alfombra test 2`**: el campo es cm y estaba en 21 (metros tecleados en campo de cm) → 400 × 2100. Sin tocar fórmulas; precios verificados idénticos. |
 | 2026-08-13 | **6** | ✅ **FASE 6 COMPLETADA** — `custom-size-snippet.liquid`: guarda `reglaId`, valida el par con rotación, estado Agotado | Entregado para copiar/pegar; copia versionada en `tema-entregas/`. Compat: si `capacidades` no viene, comportamiento actual intacto. Sin tocar `calcular()`. **Pendiente: que Jonas lo pegue en el editor de temas.** |
 | 2026-08-13 | **7** | ✅ **FASE 7 COMPLETADA** — `functions.js`: envía `id` + `reglaId`, muestra el error real de stock | Solo 2 zonas tocadas. Copia versionada en `tema-entregas/`. La idempotencia queda arreglada incluso para items viejos (el snippet siempre guardó `id`; faltaba enviarlo) → levanta la advertencia de la Fase 4. **Pendiente: que Jonas lo pegue en el editor de temas.** |
+| 2026-08-13 | **§5.0** | 🔶 **CAMBIO DE LÓGICA — escalones por ancho de rollo** | Regla de negocio nueva: un pedido solo usa rollos de **su** escalón (el primer ancho >= al requerido) y un escalón seco **no** salta al de arriba. Cambiado a la vez en `capacidades()`, en la sentencia atómica de `reservar()` y en el snippet, para que widget y checkout no se contradigan. Rotación: cada orientación usa el escalón del lado que va a lo ancho del rollo (decisión de Jonas — simétrico en ancho/alto). `capacidades()` pasa a devolver **la escalera completa**, incluidos los anchos secos, y "Agotado" se detecta con `hayMaterial()`. Verificado contra la base real: 250 se bloquea con los de 300 en 70 cm, 301–400 sigue vendiendo, y **ningún caso de las Fases 2–4 cambió de resultado**. **Pendiente: que Jonas pegue el snippet nuevo.** |
+| 2026-08-13 | **UI** | ✅ Aviso de "medida no disponible" movido **debajo de los sliders** | Antes salía junto al botón y obligaba a hacer scroll. Ahora aparece entre el slider de alto y el bloque del impermeabilizador, como caja con fondo y borde. El botón se sigue deshabilitando igual. Incluye reubicación en runtime por si el markup del tema divergió. |
 | | **8** | ⬜ Pendiente | |
 
 ### Cómo actualizar esta bitácora

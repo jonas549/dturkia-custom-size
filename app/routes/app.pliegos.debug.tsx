@@ -17,12 +17,14 @@ import prisma from "../db.server";
 import {
   capacidades,
   eliminarReservas,
+  escalones,
   estadoPliegos,
   factible,
   reconciliar,
   reservar,
   RESERVA_TTL_MIN,
   type Capacidad,
+  type Escalon,
   type PliegoEstado,
 } from "../lib/pliegos.server";
 
@@ -66,7 +68,11 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     ? await Promise.all([estadoPliegos(shop, reglaId), capacidades(shop, reglaId)])
     : [[] as PliegoEstado[], [] as Capacidad[]];
 
-  return { shop, reglas, reglaId, pliegos, caps, ttl: RESERVA_TTL_MIN };
+  return {
+    shop, reglas, reglaId, pliegos, caps,
+    escalonesLista: escalones(caps) as Escalon[],
+    ttl: RESERVA_TTL_MIN,
+  };
 };
 
 export const action = async ({ request }: ActionFunctionArgs) => {
@@ -264,7 +270,7 @@ const aviso: React.CSSProperties = {
 const m = (cm: number) => `${(cm / 100).toFixed(2)} m`;
 
 export default function PliegosDebug() {
-  const { reglas, reglaId, pliegos, caps, ttl } = useLoaderData<typeof loader>();
+  const { reglas, reglaId, pliegos, caps, escalonesLista, ttl } = useLoaderData<typeof loader>();
   const data = useActionData<typeof action>();
   const nav = useNavigation();
   const corriendo = nav.state === "submitting";
@@ -354,7 +360,19 @@ export default function PliegosDebug() {
           <p style={{ fontSize: 13, color: "#6d7175", margin: "12px 0 0" }}>
             <strong>capacidades()</strong> → {caps.length
               ? caps.map((c) => `{ancho ${c.anchoCm}, largoMax ${c.largoMaxCm}}`).join("  ")
-              : "[] (agotado)"}
+              : "[] (sin rollos activos)"}
+          </p>
+          <p style={{ fontSize: 13, color: "#6d7175", margin: "6px 0 0" }}>
+            <strong>escalones</strong> → {escalonesLista.length
+              ? escalonesLista
+                  .map((e) => `ancho ${e.desdeCm}–${e.hastaCm} → ${
+                    e.largoMaxCm > 0 ? `largo ≤ ${e.largoMaxCm}` : "SIN MATERIAL"
+                  }`)
+                  .join("   ·   ")
+              : "—"}
+            <br />
+            Un pedido solo usa rollos de <strong>su</strong> escalón. Cada orientación calcula el
+            suyo con el lado que va a lo ancho del rollo.
           </p>
         </div>
 

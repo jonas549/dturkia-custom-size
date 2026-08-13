@@ -1,6 +1,6 @@
 import type { LoaderFunctionArgs } from "react-router";
 import { neon } from "@neondatabase/serverless";
-import { capacidades, tienePliegos, type Capacidad } from "../lib/pliegos.server";
+import { capacidades, hayMaterial, tienePliegos, type Capacidad } from "../lib/pliegos.server";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -108,8 +108,13 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   // Tres estados distintos, y la diferencia importa:
   //   · `capacidades` ausente  → la trama NO tiene pliegos cargados. Sin control
   //                              de stock: el widget se comporta como siempre.
-  //   · `capacidades: []`      → tiene pliegos pero no queda material. AGOTADO.
-  //   · `capacidades: [...]`   → hay material; el widget valida el PAR (§2.3).
+  //   · sin ningún `largoMaxCm > 0` → tiene pliegos pero no queda material. AGOTADO.
+  //   · con material           → el widget valida el PAR (§2.3) por escalones.
+  //
+  // ⚠️ `capacidades` es LA ESCALERA de anchos de rollo, no "lo vendible": los
+  // anchos agotados viajan con `largoMaxCm: 0` porque el widget los necesita
+  // para calcular el escalón. Un ancho agotado que desapareciera del arreglo
+  // haría que el widget ofreciera el escalón de arriba.
   let capacidadesResp: Capacidad[] | undefined;
   let topes = {
     minAncho: regla.minAncho,
@@ -122,13 +127,16 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     if (await tienePliegos(shop, regla.id)) {
       capacidadesResp = await capacidades(shop, regla.id);
 
-      if (capacidadesResp.length) {
+      if (hayMaterial(capacidadesResp)) {
         // Tope físico por dimensión, CON rotación (decisión 1): una pieza de
         // lado X cabe si algún rollo tiene ese ancho, o si su largo lo permite
         // cortándola girada. Por eso el tope es el mayor de ambos.
-        const topeFisico = capacidadesResp.reduce(
-          (mx, c) => Math.max(mx, c.anchoCm, c.largoMaxCm), 0,
-        );
+        //
+        // Solo cuentan los anchos CON material: un escalón seco no puede vender
+        // nada, así que ampliar el slider por su ancho sería ofrecer humo.
+        const topeFisico = capacidadesResp
+          .filter((c) => c.largoMaxCm > 0)
+          .reduce((mx, c) => Math.max(mx, c.anchoCm, c.largoMaxCm), 0);
         // §2.4 — híbrido: el tope manual es un techo COMERCIAL y el físico solo
         // puede restringirlo, nunca ampliarlo.
         topes = {

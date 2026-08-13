@@ -4,8 +4,12 @@
  *
  * Reglas del dominio que este módulo implementa:
  *  - Una alfombra sale SIEMPRE de un solo pliego. No se parchan pliegos.
- *  - El ancho manda: solo cabe si anchoPliego >= anchoRequerido.
- *  - Rotación SÍ (decisión 1): se evalúan las dos orientaciones y compiten.
+ *  - ESCALONES POR ANCHO DE ROLLO (§5.0): cada ancho de rollo que existe en la
+ *    trama define un escalón. Un pedido se asigna al escalón del primer ancho
+ *    de rollo >= al ancho requerido, y SOLO puede usar rollos de ESE ancho
+ *    exacto. Un escalón sin material NO toma prestado del escalón de arriba.
+ *  - Rotación SÍ (decisión 1): se evalúan las dos orientaciones y compiten,
+ *    cada una contra el escalón del lado que va a lo ancho del rollo.
  *  - Margen de corte 0 (decisión 2): se descuenta el largo exacto.
  *  - El stock NO se resta, se OCUPA (§3.1). Una reserva 'pendiente' de más de
  *    15 min deja de ocupar sola: es una condición de tiempo en el WHERE.
@@ -95,12 +99,20 @@ export type PliegoEstado = {
 // ── 1. capacidades() ────────────────────────────────────────────────────────
 
 /**
- * Capacidad física por ancho de rollo. Es lo que la Fase 5 expondrá en
+ * Capacidad física por ancho de rollo. Es lo que la Fase 5 expone en
  * /api/precio para que el snippet valide el PAR (ancho, largo) — ver §2.3.
  *
  * Usa la MISMA fórmula de disponibilidad que el selector (descuenta reservas
  * vigentes). Si usara `largoRestanteCm` a secas, el widget podría decir
  * "cabe" y el checkout responder "sin stock" para la misma medida.
+ *
+ * ⚠️ DEVUELVE TAMBIÉN LOS ANCHOS SIN MATERIAL (`largoMaxCm: 0`). Es
+ * imprescindible desde la regla de escalones: el arreglo no es "lo que se
+ * puede vender", es LA ESCALERA de anchos de rollo de la trama. Si un ancho
+ * agotado desapareciera del arreglo, el escalón se recalcularía sobre el
+ * siguiente ancho y un pedido de 250 volvería a saltar al rollo de 400, que es
+ * justo lo que la regla prohíbe. "Agotada" se decide con `hayMaterial()`, no
+ * con la longitud del arreglo.
  *
  * ⚠️ Devuelve capacidad FÍSICA pura. El tope comercial (maxAncho/maxAlto de la
  * regla) NO se aplica aquí: el híbrido `min(tope comercial, tope físico)` del
@@ -111,21 +123,15 @@ export async function capacidades(shop: string, reglaId: string): Promise<Capaci
   const sql = db();
   const filas = await sql`
     SELECT p."anchoCm",
-           MAX(p."largoRestanteCm" - COALESCE((
+           GREATEST(MAX(p."largoRestanteCm" - COALESCE((
              SELECT SUM(r."largoCm") FROM "ReservaPliego" r
              WHERE r."pliegoId" = p.id
                AND r.estado = 'pendiente'
                AND r."createdAt" > NOW() - make_interval(mins => ${RESERVA_TTL_MIN}::int)
-           ), 0)) AS "largoMaxCm"
+           ), 0)), 0) AS "largoMaxCm"
     FROM "Pliego" p
     WHERE p.shop = ${shop} AND p."reglaId" = ${reglaId} AND p.activo
     GROUP BY p."anchoCm"
-    HAVING MAX(p."largoRestanteCm" - COALESCE((
-             SELECT SUM(r."largoCm") FROM "ReservaPliego" r
-             WHERE r."pliegoId" = p.id
-               AND r.estado = 'pendiente'
-               AND r."createdAt" > NOW() - make_interval(mins => ${RESERVA_TTL_MIN}::int)
-           ), 0)) > 0
     ORDER BY p."anchoCm"
   `;
   return filas.map((f: any) => ({
@@ -134,15 +140,68 @@ export async function capacidades(shop: string, reglaId: string): Promise<Capaci
   }));
 }
 
+/** ¿Queda material vendible en la trama? Es el "Agotado" de la decisión 3. */
+export function hayMaterial(caps: Capacidad[]): boolean {
+  return caps.some((c) => c.largoMaxCm > 0);
+}
+
 /**
- * ¿Cabe (ancho × alto) en alguna capacidad, en alguna de las dos orientaciones?
- * Función pura — se replicará en JS en el snippet (Fase 6).
+ * EL ESCALÓN de una medida: el primer ancho de rollo >= a ella.
+ *
+ * Los escalones NO están escritos en ninguna parte, se derivan de los anchos de
+ * rollo activos de la trama. Con anchos {100, 300, 400}:
+ *    1–100 → 100 · 101–300 → 300 · 301–400 → 400 · 401+ → sin escalón
+ * Si mañana entra un rollo de 200, aparece el escalón 101–200 y el de 300 pasa
+ * a ser 201–300, sin tocar código.
+ *
+ * Devuelve `null` si no existe ningún ancho de rollo >= a la medida: entonces
+ * la pieza no se puede cortar en esa orientación.
+ *
+ * ⚠️ Un ancho con `largoMaxCm: 0` SIGUE definiendo su escalón. Que el escalón
+ * esté seco no habilita el de arriba; simplemente no hay venta. Solo dar de
+ * baja el último rollo de ese ancho lo elimina de la escalera.
+ */
+export function escalonPara(medidaCm: number, caps: Capacidad[]): Capacidad | null {
+  let mejor: Capacidad | null = null;
+  for (const c of caps) {
+    if (c.anchoCm >= medidaCm && (mejor === null || c.anchoCm < mejor.anchoCm)) mejor = c;
+  }
+  return mejor;
+}
+
+export type Escalon = { desdeCm: number; hastaCm: number; largoMaxCm: number };
+
+/**
+ * La escalera completa, en el formato en que se le explica a un humano:
+ * `{desde, hasta}` en vez de "el primer ancho >=". Solo para mostrar en el
+ * admin y en la ruta de diagnóstico — la lógica usa `escalonPara()`.
+ */
+export function escalones(caps: Capacidad[]): Escalon[] {
+  const ordenadas = [...caps].sort((a, b) => a.anchoCm - b.anchoCm);
+  let desde = 1;
+  return ordenadas.map((c) => {
+    const e = { desdeCm: desde, hastaCm: c.anchoCm, largoMaxCm: c.largoMaxCm };
+    desde = c.anchoCm + 1;
+    return e;
+  });
+}
+
+/**
+ * ¿Cabe (ancho × alto) en la trama, en alguna de las dos orientaciones?
+ * Función pura — está replicada en JS en el snippet (Fase 6) y las dos deben
+ * decir SIEMPRE lo mismo, o el widget y el checkout se contradicen.
+ *
+ * Cada orientación se valida contra SU PROPIO escalón: el del lado que va a lo
+ * ancho del rollo. Es simétrico en (ancho, alto) — la misma alfombra da la
+ * misma respuesta se pida 250×350 o 350×250, que es lo correcto porque la
+ * merma de ancho de rollo es idéntica en ambos casos.
  */
 export function factible(anchoCm: number, altoCm: number, caps: Capacidad[]): boolean {
-  return caps.some(
-    (c) =>
-      (c.anchoCm >= anchoCm && c.largoMaxCm >= altoCm) ||
-      (c.anchoCm >= altoCm && c.largoMaxCm >= anchoCm),
+  const normal = escalonPara(anchoCm, caps);   // consume `altoCm` de largo
+  const rotada = escalonPara(altoCm, caps);    // consume `anchoCm` de largo
+  return (
+    (normal !== null && normal.largoMaxCm >= altoCm) ||
+    (rotada !== null && rotada.largoMaxCm >= anchoCm)
   );
 }
 
@@ -167,6 +226,13 @@ export function factible(anchoCm: number, altoCm: number, caps: Capacidad[]): bo
  * (la restricción de agregados aplica al nivel superior, no a subconsultas).
  * Bloquea solo filas de "Pliego" y serializa dos compras simultáneas del mismo
  * rollo sin esperas: la segunda salta al siguiente candidato.
+ *
+ * 🔶 REGLA DE ESCALONES (cambio de 2026-08-13): la condición de ancho pasó de
+ * `p."anchoCm" >= o."anchoReq"` (cualquier rollo más ancho servía) a
+ * `p."anchoCm" = <primer ancho de rollo >= o."anchoReq">`. Cada orientación
+ * calcula su propio escalón sobre el ancho que ella usa. Si no existe ningún
+ * ancho de rollo >= al requerido, el MIN es NULL, la igualdad no se cumple y
+ * esa orientación no aporta candidatos.
  */
 async function reservarItem(
   shop: string,
@@ -195,14 +261,23 @@ async function reservarItem(
       WHERE p.shop = ${shop}
         AND p."reglaId" = ${reglaId}
         AND p.activo
-        AND p."anchoCm" >= o."anchoReq"
+        -- ↓↓↓ ESCALÓN: el rollo tiene que ser del PRIMER ancho >= al requerido,
+        -- no de cualquiera más ancho. NULL (no hay ancho suficiente) → sin match.
+        AND p."anchoCm" = (
+              SELECT MIN(p2."anchoCm") FROM "Pliego" p2
+              WHERE p2.shop = ${shop}
+                AND p2."reglaId" = ${reglaId}
+                AND p2.activo
+                AND p2."anchoCm" >= o."anchoReq"
+            )
         AND p."largoRestanteCm" - COALESCE((
               SELECT SUM(r2."largoCm") FROM "ReservaPliego" r2
               WHERE r2."pliegoId" = p.id
                 AND r2.estado = 'pendiente'
                 AND r2."createdAt" > NOW() - make_interval(mins => ${RESERVA_TTL_MIN}::int)
             ), 0) >= o.largo
-      ORDER BY (p."anchoCm" - o."anchoReq") ASC,  -- 1. ancho más cercano
+      ORDER BY (p."anchoCm" - o."anchoReq") ASC,  -- 1. menos merma (decide ENTRE las dos orientaciones;
+                                                  --    dentro de una, el escalón ya fijó el ancho)
                p."anchoCm" ASC,                    -- 2. a igual merma, el rollo más angosto
                disponible ASC,                     -- 3. el rollo más gastado primero
                p.codigo ASC,                       -- 4. determinista y legible en QA
@@ -287,11 +362,17 @@ export async function reservar(
 ): Promise<ResultadoReserva> {
   const hechas: ReservaAsignada[] = [];
 
+  // La escalera de anchos es la misma para todo el lote: se lee una vez y sirve
+  // para los logs de diagnóstico de cada item.
+  const caps0 = await capacidades(shop, reglaId);
+
   for (const item of items) {
+    const escN = escalonPara(item.anchoCm, caps0);
+    const escR = escalonPara(item.altoCm, caps0);
     log(`reserva refId=${item.refId} regla=${reglaId} pedido=${item.anchoCm}x${item.altoCm}`);
     log(
-      `  candidatos: normal(req>=${item.anchoCm},cons=${item.altoCm})`,
-      `rotada(req>=${item.altoCm},cons=${item.anchoCm})`,
+      `  escalones: normal(ancho ${item.anchoCm} → rollo ${escN ? escN.anchoCm : "—"}, cons=${item.altoCm})`,
+      `rotada(ancho ${item.altoCm} → rollo ${escR ? escR.anchoCm : "—"}, cons=${item.anchoCm})`,
     );
 
     const asignada = await reservarItem(shop, reglaId, item);
