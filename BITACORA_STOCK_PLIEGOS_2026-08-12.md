@@ -2,8 +2,28 @@
 
 **Proyecto:** dturkia-custom-size (D'Turkia · `dturkia.myshopify.com`)
 **Iniciada:** 2026-08-12
-**Estado:** Fase 1 entregada (código) · semilla bloqueada: **no existe la regla de Ceniza**
+**Estado:** ✅ **Fase 1 COMPLETADA** (migración aplicada + 11 pliegos sembrados y validados)
 **Última actualización:** 2026-08-13
+
+> ### ⚠️ LEER ANTES DE TOCAR NADA — sobre "Ceniza"
+>
+> **Ceniza NO existe** como producto de Shopify ni como `ReglaPersonalizada`, y **no se va a crear
+> ahora**. Era solo el ejemplo del Excel del cliente, y este documento lo trataba como si ya
+> estuviera en producción. **No volver a asumirlo.**
+>
+> **Todo el MVP y el QA del módulo de pliegos se hacen sobre la regla de prueba ya existente:**
+>
+> | | |
+> |---|---|
+> | Regla | **`Alfombra test 2`** |
+> | `reglaId` | `cmoipz5lp0000l704zvl3nx6h` |
+> | Producto | `gid://shopify/Product/8557639893127` (ACTIVE, tag `medida-personalizada`) |
+>
+> Cuando el MVP esté validado, **más adelante** se creará el producto Ceniza real y se reapuntará la
+> integración (un `UPDATE "Pliego" SET "reglaId" = ...`). **Eso no es ahora.**
+>
+> Los códigos de pliego siguen diciendo `CEN-*` porque son los del inventario de ejemplo y sirven
+> para el QA. Donde este documento diga "Ceniza", léase "la regla de prueba Alfombra test 2".
 
 > Documento de referencia consultable entre sesiones. Se actualiza al cerrar cada fase
 > (ver [§8 Registro de avance](#8-registro-de-avance)).
@@ -26,6 +46,9 @@
 ## 1. Contexto del negocio
 
 ### 1.1 Qué son las tramas
+
+> ⚠️ **Ceniza y Alba son nombres del Excel del cliente, no productos existentes.** Ninguna trama real
+> está todavía modelada en Shopify. Ver el aviso de la cabecera: el MVP corre sobre `Alfombra test 2`.
 
 D'Turkia vende alfombras **a medida** de distintas "tramas" (Ceniza, Alba, …).
 Cada trama es **un producto de Shopify** con una `ReglaPersonalizada` asociada (ancho/alto mín-máx +
@@ -86,7 +109,11 @@ Es decir, **Ceniza tiene 11 pliegos físicos**:
 > **Corrección (2026-08-13, Fase 1):** este documento decía **232.90 m**. Es un error aritmético.
 > La suma real del inventario listado arriba es:
 > `(3 × 2010) + (4 × 2170) + (4 × 2100) = 6030 + 8680 + 8400 = 23110 cm = 231.10 m`.
-> La consulta de validación de la Fase 1 espera **231.10**, no 232.90.
+> La consulta de validación de la Fase 1 espera **231.10**, no 232.90. Verificado contra la DB.
+
+> **Dónde están estos 11 pliegos (2026-08-13):** sembrados y colgados de la regla de prueba
+> **`Alfombra test 2`** (`cmoipz5lp0000l704zvl3nx6h`), no de una regla "Ceniza" — que no existe.
+> Ver el aviso de la cabecera.
 
 Cada pliego físico es **independiente**: si se corta de uno de los rollos de 4×20.10, solo baja el
 largo de **ese** rollo, no el de los otros dos iguales.
@@ -268,6 +295,7 @@ model ReservaPliego {
   id            String   @id @default(cuid())
   shop          String
   pliegoId      String
+  pliego        Pliego   @relation(fields: [pliegoId], references: [id], onDelete: Restrict)  // ← añadido en Fase 1
   reglaId       String
   refId         String   @unique                // = id del item de localStorage → idempotencia
   largoCm       Int                             // lo que consume del pliego
@@ -286,6 +314,7 @@ model MovimientoPliego {                        // solo ajustes manuales y altas
   id        String   @id @default(cuid())
   shop      String
   pliegoId  String
+  pliego    Pliego   @relation(fields: [pliegoId], references: [id], onDelete: Restrict)  // ← añadido en Fase 1
   largoCm   Int
   motivo    String                              // 'alta' | 'ajuste' | 'baja'
   nota      String   @default("")
@@ -319,6 +348,10 @@ orderName    String  @default("")   // "#D1042" — para cruzar orden ↔ pliego
   no con una restricción.
 - **`onDelete: Restrict`** para que no se pueda borrar una regla que tiene pliegos vivos.
 - **Nunca `DELETE` de pliegos**, solo `activo = false`, para no romper la trazabilidad histórica.
+  Desde la Fase 1 esto está **forzado por la DB**: `ReservaPliego.pliegoId` y
+  `MovimientoPliego.pliegoId` tienen FK `ON DELETE RESTRICT` a `Pliego`. El §4.1 original no las
+  declaraba; se añadieron porque una reserva huérfana **falsearía en silencio** el cálculo de
+  disponibilidad del §5.4 (la `SUM` dejaría de contarla y el pliego parecería más libre de lo que está).
 - **`CHECK ("largoRestanteCm" >= 0)`** como red de seguridad final a nivel DB.
 - Migración **aditiva pura**, sin backfill: no toca ningún dato existente.
 
@@ -504,17 +537,12 @@ Y que el `CHECK` muerda: un `UPDATE` a −1 debe fallar con
 
 **Dependencias:** ninguna. Es la primera.
 
-**De Jonas:**
-- (a) ~~Confirmar qué regla corresponde a Ceniza~~ → **Resuelto por lectura directa de Neon el
-  2026-08-13: la regla NO EXISTE.** La tabla `ReglaPersonalizada` solo tiene 2 reglas de prueba
-  (`Alfombra Medida Personalizada (TEST)` → producto en DRAFT, y `Alfombra test 2`), y la tienda no
-  tiene ningún producto llamado Ceniza con el tag `medida-personalizada`.
-  **Nuevo bloqueante:** crear el producto Ceniza en Shopify + su `ReglaPersonalizada` en
-  `/app/reglas`. Hasta entonces la semilla aborta a propósito (`RAISE EXCEPTION`) en vez de colgar
-  los 11 pliegos de una regla equivocada.
-- (b) Correr `npx prisma migrate deploy` (la migración **no** depende de esto: es aditiva pura y se
-  puede aplicar hoy mismo).
-- (c) Commit + push. ✅ hecho el 2026-08-13.
+**De Jonas:** nada pendiente. ✅ Todo ejecutado el 2026-08-13.
+- (a) ~~Confirmar qué regla corresponde a Ceniza~~ → **Ceniza no existe y no se va a crear ahora.**
+  Decisión del cliente: el MVP corre sobre `Alfombra test 2` (`cmoipz5lp0000l704zvl3nx6h`).
+  Ver el aviso de la cabecera.
+- (b) ~~`npx prisma migrate deploy`~~ → ✅ aplicada.
+- (c) ~~Commit + push~~ → ✅ hecho.
 
 ---
 
@@ -790,9 +818,10 @@ registrado en `MovimientoPliego` con nota obligatoria. Es **corregible, no autom
 
 | | |
 |---|---|
-| **Fase actual** | **Fase 1 — código entregado y commiteado.** Falta aplicar la migración en Neon y sembrar. |
-| **Bloqueante** | **No existe la `ReglaPersonalizada` de Ceniza** (verificado en Neon el 2026-08-13: solo 2 reglas de prueba). Hay que crear el producto Ceniza en Shopify con tag `medida-personalizada` y su regla en `/app/reglas`. Sin eso la semilla no puede correr. **No bloquea la migración**, que es aditiva pura. |
-| **Siguiente entregable** | Fase 2: `app/lib/pliegos.server.ts` + `/app/pliegos/debug` — **no arrancar hasta que la Fase 1 esté aplicada y sembrada** (la Fase 2 se valida contra los 11 pliegos reales) |
+| **Fase actual** | ✅ **Fase 1 COMPLETADA** (2026-08-13). Migración aplicada en Neon, 11 pliegos sembrados, validaciones aprobadas. |
+| **Bloqueantes** | Ninguno. |
+| **Datos en producción** | 11 pliegos · 23110 cm · colgados de `Alfombra test 2` (`cmoipz5lp0000l704zvl3nx6h`) · 11 `MovimientoPliego` motivo `alta` · 0 reservas |
+| **Siguiente entregable** | **Fase 2** (no arrancada): `app/lib/pliegos.server.ts` con `capacidades()` / `reservar()` / `reconciliar()` + ruta de diagnóstico `/app/pliegos/debug`. La matriz de prueba del §FASE 2 ya se puede correr tal cual contra estos 11 pliegos. |
 
 ### Historial
 
@@ -802,7 +831,9 @@ registrado en `MovimientoPliego` con nota obligatoria. Es **corregible, no autom
 | 2026-08-12 | — | 5 decisiones cerradas por el cliente | Ver §3 |
 | 2026-08-12 | — | Plan de 8 fases aprobado | Ver §6 |
 | 2026-08-12 | — | Bitácora creada | Este documento |
-| 2026-08-13 | **1** | ✅ **Código completo** — schema + migración + semilla + validación | Migración verificada contra `prisma migrate diff` (coincide exacta). **Pendiente de aplicar:** `migrate deploy` + semilla. Semilla **bloqueada**: no existe la regla de Ceniza. Corregido de paso el total de §1.5: 231.10 m, no 232.90 m. |
+| 2026-08-13 | **1** | Código completo — schema + migración + semilla + validación | Migración verificada contra `prisma migrate diff` (coincide exacta). Corregido el total de §1.5: 231.10 m, no 232.90 m. |
+| 2026-08-13 | — | **Supuesto corregido: Ceniza no existe** | Verificado en Neon + Shopify. Decisión del cliente: el MVP corre sobre `Alfombra test 2`. Ceniza queda como paso futuro. Ver aviso de la cabecera. |
+| 2026-08-13 | **1** | ✅ **FASE 1 COMPLETADA** — migración aplicada, 11 pliegos sembrados, validaciones aprobadas | `migrate deploy` OK · 11 pliegos / 23110 cm / 231.10 m sobre `Alfombra test 2` · 11 movimientos `alta` · CHECK y las 3 FK `RESTRICT` verificadas mordiendo. Añadidas las FK de `ReservaPliego.pliegoId` y `MovimientoPliego.pliegoId` (no estaban en el §4.1 original). |
 | | **2** | ⬜ Pendiente | |
 | | **3** | ⬜ Pendiente | |
 | | **4** | ⬜ Pendiente | |

@@ -97,6 +97,23 @@ ALTER TABLE "Pliego"
     ON DELETE RESTRICT
     ON UPDATE CASCADE;
 
+-- Integridad referencial de las reservas: una reserva huérfana falsearía el
+-- cálculo de disponibilidad en silencio (la SUM del §5.4 dejaría de verla).
+ALTER TABLE "ReservaPliego"
+    ADD CONSTRAINT "ReservaPliego_pliegoId_fkey"
+    FOREIGN KEY ("pliegoId")
+    REFERENCES "Pliego"("id")
+    ON DELETE RESTRICT
+    ON UPDATE CASCADE;
+
+-- Ídem para la auditoría: preserva la trazabilidad histórica de altas y ajustes.
+ALTER TABLE "MovimientoPliego"
+    ADD CONSTRAINT "MovimientoPliego_pliegoId_fkey"
+    FOREIGN KEY ("pliegoId")
+    REFERENCES "Pliego"("id")
+    ON DELETE RESTRICT
+    ON UPDATE CASCADE;
+
 -- ---------------------------------------------------------------------------
 -- AlterTable: PedidoCustom — asignación de pliego (§4.2)
 -- ---------------------------------------------------------------------------

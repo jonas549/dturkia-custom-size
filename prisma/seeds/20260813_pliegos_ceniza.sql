@@ -1,5 +1,21 @@
--- Semilla — 11 pliegos físicos de la trama CENIZA
+-- Semilla — 11 pliegos físicos para el MVP del módulo de stock por pliego
 -- Ver BITACORA_STOCK_PLIEGOS_2026-08-12.md §1.5
+--
+-- ---------------------------------------------------------------------------
+-- ⚠️ SOBRE "CENIZA" — NO VOLVER A ASUMIR QUE EXISTE
+--
+-- Ceniza era SOLO el ejemplo del Excel del cliente. NO existe como producto ni
+-- como ReglaPersonalizada, y NO se va a crear ahora.
+--
+-- TODO el MVP y el QA se hacen sobre la regla de prueba ya existente:
+--     "Alfombra test 2" · id cmoipz5lp0000l704zvl3nx6h · ACTIVE
+--     producto gid://shopify/Product/8557639893127
+--
+-- Los códigos siguen diciendo CEN-* porque son los del inventario de ejemplo y
+-- sirven para el QA. Cuando el MVP se valide, se creará el producto Ceniza real
+-- y se reapuntarán estos pliegos a su regla (un UPDATE de "reglaId"). Eso NO es
+-- ahora.
+-- ---------------------------------------------------------------------------
 --
 -- Inventario de origen (formato MEDIDA | CANTIDAD | TRAMA):
 --   4 X 20.10 M | 3 | Ceniza   → CEN-400-01..03   ancho 400 cm, largo 2010 cm
@@ -9,59 +25,33 @@
 --   Total: 11 rollos · 23110 cm = 231.10 m lineales
 --   (3×2010 = 6030) + (4×2170 = 8680) + (4×2100 = 8400) = 23110
 --
---   ⚠️ La bitácora §1.5 dice "232.90 m". Es un error aritmético del documento:
---      la suma real del inventario listado es 231.10 m. Corregido aquí y en §1.5.
+--   ⚠️ La bitácora §1.5 decía "232.90 m". Error aritmético del documento:
+--      la suma real del inventario listado es 231.10 m. Ya corregido.
 --
--- ---------------------------------------------------------------------------
--- ⛔ REQUISITO PREVIO — NO SE PUEDE EJECUTAR TODAVÍA (2026-08-13)
---
--- Este script resuelve el reglaId buscando la ReglaPersonalizada de Ceniza por
--- nombre. Al 2026-08-13 esa regla NO EXISTE: la tabla solo tiene 2 reglas de
--- prueba ("Alfombra Medida Personalizada (TEST)" y "Alfombra test 2"), y no hay
--- ningún producto llamado Ceniza con el tag medida-personalizada en la tienda.
---
--- El script está escrito para FALLAR RUIDOSAMENTE (RAISE EXCEPTION) en vez de
--- colgar los 11 pliegos de una regla equivocada. Correrlo hoy aborta sin
--- escribir nada — es seguro intentarlo.
---
--- Para poder sembrar hace falta primero, en este orden:
---   1. Crear el producto "Ceniza" en Shopify con el tag `medida-personalizada`.
---   2. Crear su ReglaPersonalizada en /app/reglas apuntando a ese producto,
---      con "Ceniza" en el nombre.
--- ---------------------------------------------------------------------------
+-- Idempotente: re-ejecutarlo no duplica nada (ON CONFLICT por shop+codigo).
 
 DO $$
 DECLARE
-  v_shop     TEXT := 'dturkia.myshopify.com';
-  v_regla_id TEXT;
-  v_n_reglas INT;
+  v_shop       TEXT := 'dturkia.myshopify.com';
+  v_regla_id   TEXT := 'cmoipz5lp0000l704zvl3nx6h';  -- "Alfombra test 2"
+  v_nombre     TEXT;
   v_insertados INT;
+  v_altas      INT;
 BEGIN
-  -- Resolver la regla de Ceniza por nombre.
-  SELECT COUNT(*) INTO v_n_reglas
+  -- Verificar que la regla objetivo existe antes de colgarle nada.
+  SELECT nombre INTO v_nombre
   FROM "ReglaPersonalizada"
-  WHERE shop = v_shop AND nombre ILIKE '%ceniza%';
+  WHERE id = v_regla_id AND shop = v_shop;
 
-  IF v_n_reglas = 0 THEN
+  IF v_nombre IS NULL THEN
     RAISE EXCEPTION
-      'ABORTADO: no existe ninguna ReglaPersonalizada con "ceniza" en el nombre para %. Crear el producto Ceniza + su regla antes de sembrar.',
-      v_shop;
+      'ABORTADO: no existe la ReglaPersonalizada % en %. Verificar el id antes de sembrar.',
+      v_regla_id, v_shop;
   END IF;
 
-  IF v_n_reglas > 1 THEN
-    RAISE EXCEPTION
-      'ABORTADO: hay % reglas con "ceniza" en el nombre para %. Ambiguo — sembrar a mano con el id correcto.',
-      v_n_reglas, v_shop;
-  END IF;
-
-  SELECT id INTO v_regla_id
-  FROM "ReglaPersonalizada"
-  WHERE shop = v_shop AND nombre ILIKE '%ceniza%';
-
-  RAISE NOTICE 'Regla de Ceniza resuelta: %', v_regla_id;
+  RAISE NOTICE 'Sembrando sobre la regla "%" (%)', v_nombre, v_regla_id;
 
   -- Alta de los 11 pliegos. largoRestanteCm = largoTotalCm (rollos enteros).
-  -- ON CONFLICT: re-ejecutar el script no duplica nada (idempotente por shop+codigo).
   INSERT INTO "Pliego" (
     "id", "shop", "reglaId", "codigo",
     "anchoCm", "largoTotalCm", "largoRestanteCm",
@@ -70,7 +60,7 @@ BEGIN
   SELECT
     gen_random_uuid()::TEXT, v_shop, v_regla_id, p.codigo,
     p.ancho, p.largo, p.largo,
-    true, '', NOW()
+    true, 'Semilla MVP — inventario de ejemplo Ceniza', NOW()
   FROM (VALUES
     ('CEN-400-01', 400, 2010),
     ('CEN-400-02', 400, 2010),
@@ -89,11 +79,11 @@ BEGIN
   GET DIAGNOSTICS v_insertados = ROW_COUNT;
   RAISE NOTICE 'Pliegos insertados: % (0 = ya estaban)', v_insertados;
 
-  -- Auditoría: un movimiento 'alta' por cada pliego recién creado.
+  -- Auditoría: un movimiento 'alta' por cada pliego que aún no lo tenga.
   INSERT INTO "MovimientoPliego" ("id", "shop", "pliegoId", "largoCm", "motivo", "nota", "createdAt")
   SELECT
     gen_random_uuid()::TEXT, v_shop, pl.id, pl."largoTotalCm",
-    'alta', 'Semilla inicial Ceniza (rollo entero)', NOW()
+    'alta', 'Semilla MVP (rollo entero)', NOW()
   FROM "Pliego" pl
   WHERE pl.shop = v_shop
     AND pl."reglaId" = v_regla_id
@@ -101,4 +91,7 @@ BEGIN
       SELECT 1 FROM "MovimientoPliego" m
       WHERE m."pliegoId" = pl.id AND m.motivo = 'alta'
     );
+
+  GET DIAGNOSTICS v_altas = ROW_COUNT;
+  RAISE NOTICE 'Movimientos de alta creados: %', v_altas;
 END $$;

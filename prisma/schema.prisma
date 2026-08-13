@@ -91,6 +91,8 @@ model Pliego {
   activo          Boolean            @default(true) // false = agotado / de baja / dañado
   nota            String             @default("")
   createdAt       DateTime           @default(now())
+  reservas        ReservaPliego[]
+  movimientos     MovimientoPliego[]
 
   @@unique([shop, codigo])
   @@index([shop, reglaId, activo, anchoCm]) // índice que usa el selector
@@ -102,6 +104,8 @@ model ReservaPliego {
   id            String    @id @default(cuid())
   shop          String
   pliegoId      String
+  /// Restrict: una reserva huérfana falsearía el cálculo de disponibilidad en silencio.
+  pliego        Pliego    @relation(fields: [pliegoId], references: [id], onDelete: Restrict)
   reglaId       String
   refId         String    @unique // = id del item de localStorage → idempotencia
   largoCm       Int // lo que consume del pliego
@@ -121,6 +125,8 @@ model MovimientoPliego {
   id        String   @id @default(cuid())
   shop      String
   pliegoId  String
+  /// Restrict: preserva la trazabilidad histórica de altas y ajustes.
+  pliego    Pliego   @relation(fields: [pliegoId], references: [id], onDelete: Restrict)
   largoCm   Int
   motivo    String // 'alta' | 'ajuste' | 'baja'
   nota      String   @default("")
