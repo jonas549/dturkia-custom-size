@@ -962,6 +962,53 @@ Ceniza.
 
 ---
 
+#### ✅ Entregado el 2026-08-13
+
+Archivo: `tema-dturkia/snippets/custom-size-snippet.liquid`.
+Copia versionada en `dturkia-custom-size/tema-entregas/custom-size-snippet.liquid`.
+
+**Changelog por bloque:**
+
+| # | Dónde | Qué cambió |
+|---|---|---|
+| 1 | HTML, tras `#csw-error` | Nuevo `<p id="csw-stock">` para el aviso de medida no disponible / agotado |
+| 2 | `<style>`, tras `.csw-error` | Nuevas `.csw-stock` y `.csw-stock--agotado` |
+| 3 | JS, antes de `mostrarError()` | Nuevas `cabeEnCapacidades()` y `mostrarStock()` |
+| 4 | JS, en el `.then` tras leer `data.regla` | Lee `reglaId`, `capacidades`, y deriva `controlDeStock` y `tramaAgotada` |
+| 5 | JS, tras `calcular(...)` | Nueva `revisarDisponibilidad()` + primera llamada |
+| 6 | JS, listeners `input` de los dos sliders | Añadida llamada a `revisarDisponibilidad()` |
+| 7 | JS, inicio del click de `#csw-agregar` | Red de seguridad: `if (!revisarDisponibilidad()) return;` |
+| 8 | JS, los 3 sitios que escriben en `csw_pending_orders` | Añadido `reglaId` al item |
+
+**Los tres estados**, tal como los distingue el widget:
+
+```js
+var capacidades    = data.capacidades;             // puede ser undefined
+var controlDeStock = Array.isArray(capacidades);   // false = trama sin pliegos
+var tramaAgotada   = controlDeStock && capacidades.length === 0;
+```
+
+- `undefined` → **comportamiento actual intacto**, el botón nunca se deshabilita.
+- `[]` → botón deshabilitado + **"Agotado"**.
+- `[...]` → se valida el par en cada movimiento de slider.
+
+**La validación del par, con las dos orientaciones** (decisión 1):
+
+```js
+var normal = (c.anchoCm >= anchoCm && c.largoMaxCm >= altoCm);
+var rotada = (c.anchoCm >= altoCm  && c.largoMaxCm >= anchoCm);
+```
+
+⛔ **No se tocó `calcular()` ni ninguna fórmula de precio.** Los cambios son puramente de
+habilitación de botón, aviso y un campo extra en localStorage.
+
+**Validación:** sintaxis de los dos bloques `<script>` verificada con `node --check`, y
+`cabeEnCapacidades()` extraída del archivo real y probada contra las capacidades de producción:
+250×350 ✓ · 350×400 ✓ (rotada) · **350×2100 ✗** (el caso del §2.3) · 400×2010 ✓ · 400×2100 ✗ ·
+100×2170 ✓ (rotada) · `[]` → false.
+
+---
+
 ### FASE 7 🔶 — Tema: `functions.js`
 
 **Qué se hace**
@@ -1089,7 +1136,7 @@ registrado en `MovimientoPliego` con nota obligatoria. Es **corregible, no autom
 | 2026-08-13 | **3** | ✅ QA de Fase 3 aprobado por Jonas | La pantalla carga y muestra los 11 rollos correctamente. |
 | 2026-08-13 | **4** | ✅ **FASE 4 COMPLETADA** — reserva integrada en los DOS endpoints de checkout, modo observación | `PLIEGOS_MODO=off\|log\|bloqueo` con default `off`. Confirmación en `/api/check-paid`. Corregido el bug del `borde` en `api.checkout-impermeabilizador.tsx`. **Añadido al plan:** resolución de trama desde `variantId`, porque el tema aún no manda `reglaId` (Fase 6) y sin eso la fase no se podía validar. **Guarda de seguridad:** una trama sin pliegos nunca bloquea. Los 3 modos validados contra la base real. |
 | 2026-08-13 | **5** | ✅ **FASE 5 COMPLETADA** — `/api/precio` devuelve `reglaId` + `capacidades` + topes híbridos | Aditivo y envuelto en try/catch: el stock nunca tumba el precio. **Corregidos los topes de `Alfombra test 2`**: el campo es cm y estaba en 21 (metros tecleados en campo de cm) → 400 × 2100. Sin tocar fórmulas; precios verificados idénticos. |
-| | **6** | ⬜ Pendiente | |
+| 2026-08-13 | **6** | ✅ **FASE 6 COMPLETADA** — `custom-size-snippet.liquid`: guarda `reglaId`, valida el par con rotación, estado Agotado | Entregado para copiar/pegar; copia versionada en `tema-entregas/`. Compat: si `capacidades` no viene, comportamiento actual intacto. Sin tocar `calcular()`. **Pendiente: que Jonas lo pegue en el editor de temas.** |
 | | **7** | ⬜ Pendiente | |
 | | **8** | ⬜ Pendiente | |
 

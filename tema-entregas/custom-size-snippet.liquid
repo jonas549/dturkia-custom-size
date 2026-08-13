@@ -1,0 +1,1096 @@
+{% comment %}
+  Custom Size Widget — autocontenido para temas OS 1.0
+  Pegar en snippets/custom-size-snippet.liquid del tema (no de la extensión).
+  No requiere App Blocks ni archivos externos.
+{% endcomment %}
+
+{% assign csw_shop    = shop.permanent_domain %}
+{% assign csw_product = product.id | prepend: 'gid://shopify/Product/' %}
+
+{%- assign csw_instant = false -%}
+{%- for _t in product.tags -%}
+  {%- assign _t_lower = _t | downcase -%}
+  {%- if _t_lower == 'medida-personalizada' -%}
+    {%- assign csw_instant = true -%}
+  {%- endif -%}
+{%- endfor -%}
+
+{% if csw_instant %}
+<script>document.documentElement.classList.add('csw-natives-hidden');</script>
+<style>
+  .csw-natives-hidden .product .right .price,
+  .csw-natives-hidden #product-add,
+  .csw-natives-hidden .product .right .remain {
+    display: none !important;
+  }
+</style>
+{% endif %}
+
+<div id="csw-root"
+     data-shop="{{ csw_shop }}"
+     data-product-id="{{ csw_product }}"
+     data-variant-id="{{ product.selected_or_first_available_variant.id }}"
+     data-image-url="{{ product.featured_image | image_url: width: 400 }}"
+     data-product-handle="{{ product.handle }}"
+     {% unless csw_instant %}style="display:none"{% endunless %}>
+
+  {% if csw_instant %}
+  <div id="csw-loading">
+    <div style="padding:32px 0;text-align:center;color:#9A9A9A;font-size:0.8125em;letter-spacing:0.5px">
+      Cargando configurador&hellip;
+    </div>
+  </div>
+  {% endif %}
+
+  <div class="csw-container" {% if csw_instant %}style="display:none"{% endif %}>
+    <p class="csw-modo-edicion-label">Editando medidas</p>
+    <h3 class="csw-title">Medida Personalizada</h3>
+
+    <div class="csw-slider-group">
+      <label>Ancho: <span id="csw-ancho-val">--</span> cm</label>
+      <input type="range" id="csw-ancho" min="0" max="100" step="1" value="50">
+      <div class="csw-range-labels">
+        <span id="csw-ancho-min"></span>
+        <span id="csw-ancho-max"></span>
+      </div>
+    </div>
+
+    <div class="csw-slider-group">
+      <label>Alto: <span id="csw-alto-val">--</span> cm</label>
+      <input type="range" id="csw-alto" min="0" max="100" step="1" value="50">
+      <div class="csw-range-labels">
+        <span id="csw-alto-min"></span>
+        <span id="csw-alto-max"></span>
+      </div>
+    </div>
+
+    <!-- Impermeabilizador — Propuesta B; display toggled by JS -->
+    <div id="csw-waterproof-section" style="display:none">
+      <label id="csw-wf-label" class="csw-wf" for="csw-waterproof">
+        <div class="csw-wf__head">
+          <span class="csw-wf__eyebrow" id="csw-wf-eyebrow">CUIDADO &middot; RECOMENDADO</span>
+          <span class="csw-wf__rule"></span>
+        </div>
+        <div class="csw-wf__body">
+          <p class="csw-wf__title" id="csw-wf-titulo">Impermeabiliza tu alfombra</p>
+          <p class="csw-wf__sub"><span id="csw-wf-before"></span><span id="csw-waterproof-precio" class="csw-wf__price">0</span><span id="csw-wf-after"></span></p>
+        </div>
+        <p class="csw-wf__disclaimer" id="csw-wf-disclaimer">* Los plazos de entrega pueden ser desde 5 d&iacute;as h&aacute;biles</p>
+        <span class="csw-wf__action">
+          <img src="https://cdn.shopify.com/s/files/1/0551/8970/0743/files/noun-drop-51984.png?v=1778267024" alt="" loading="lazy" width="34" style="width:34px;height:auto;display:block;flex-shrink:0;">
+          <input type="checkbox" id="csw-waterproof">
+          <span class="csw-wf__chip" id="csw-wf-chip">AGREGAR</span>
+        </span>
+      </label>
+    </div>
+
+    <div class="csw-resumen">
+      <div>Alfombra: <strong id="csw-precio-alfombra">0</strong> CLP</div>
+      <div id="csw-resumen-waterproof" style="display:none">Impermeabilizador: +<strong id="csw-precio-waterproof">0</strong> CLP</div>
+      <div class="csw-total">Total: <strong id="csw-precio-total">0</strong> CLP</div>
+    </div>
+
+    <!-- Bordes decorativos — renderizados por JS cuando data.bordes tiene ítems -->
+    <div id="csw-bordes-section" style="display:none">
+      <div class="csw-bordes-head">
+        <p class="csw-bordes-ttl">Elige el borde <small>Cinta decorativa que termina los cuatro lados de tu alfombra.</small></p>
+        <span class="csw-bordes-sel" id="csw-borde-sel-label"></span>
+      </div>
+      <div class="csw-bordes-grid" id="csw-bordes-grid"></div>
+    </div>
+
+    <button id="csw-agregar" class="csw-btn" type="button">Agregar a la bolsa</button>
+    <p id="csw-error" class="csw-error" style="display:none"></p>
+    <!-- Stock por pliego (Fase 6): aviso de medida no disponible / trama agotada -->
+    <p id="csw-stock" class="csw-stock" style="display:none"></p>
+  </div>
+</div>
+
+<style>
+  #csw-root {
+    margin: 24px 0;
+    font-family: var(--font, 'Poppins', sans-serif);
+  }
+
+  .csw-container {
+    border: 1px solid var(--crema, #E3DECC);
+    padding: 20px 24px;
+    background: var(--back, #F8F7F4);
+    width: 100%;
+    box-sizing: border-box;
+  }
+
+  .csw-modo-edicion-label {
+    display: none;
+    font-size: var(--f11, 0.6875em);
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    color: var(--dorado, #A59765);
+    margin: 0 0 12px;
+  }
+
+  .csw-container.csw-modo-edicion {
+    border-left: 3px solid var(--dorado, #A59765);
+  }
+
+  .csw-container.csw-modo-edicion .csw-modo-edicion-label {
+    display: block;
+  }
+
+  .csw-title {
+    margin: 0 0 20px;
+    font-size: var(--f16, 1em);
+    font-weight: 600;
+    color: var(--color, #232930);
+    letter-spacing: 1px;
+    text-transform: uppercase;
+  }
+
+  .csw-slider-group { margin-bottom: 20px; }
+
+  .csw-slider-group label {
+    display: block;
+    font-size: var(--f13, 0.8125em);
+    font-weight: 500;
+    margin-bottom: 8px;
+    color: var(--color, #232930);
+    letter-spacing: 0.5px;
+  }
+
+  .csw-slider-group input[type="range"] {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 100%;
+    height: 3px;
+    background: var(--crema, #E3DECC);
+    outline: none;
+    cursor: pointer;
+  }
+
+  .csw-slider-group input[type="range"]::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 18px;
+    height: 18px;
+    border-radius: 50%;
+    background: var(--dorado, #A59765);
+    cursor: pointer;
+    border: 2px solid var(--blanco, #fff);
+    box-shadow: 0 1px 4px rgba(0,0,0,.2);
+    transition: var(--t025, all 0.25s ease-out);
+  }
+
+  .csw-slider-group input[type="range"]::-webkit-slider-thumb:hover {
+    opacity: 0.8;
+  }
+
+  .csw-slider-group input[type="range"]::-moz-range-thumb {
+    width: 18px;
+    height: 18px;
+    border-radius: 50%;
+    background: var(--dorado, #A59765);
+    cursor: pointer;
+    border: 2px solid var(--blanco, #fff);
+    box-shadow: 0 1px 4px rgba(0,0,0,.2);
+  }
+
+  .csw-range-labels {
+    display: flex;
+    justify-content: space-between;
+    font-size: var(--f11, 0.6875em);
+    color: var(--grisoscuro, #9A9A9A);
+    margin-top: 5px;
+    letter-spacing: 0.5px;
+  }
+
+  /* ── Impermeabilizador Propuesta B ───────────────────────────── */
+  #csw-waterproof-section {
+    margin-bottom: 20px;
+  }
+
+  .csw-wf {
+    display: block;
+    cursor: pointer;
+    background: #F4F0E8;
+    border: 1px solid #E3DCC9;
+    border-left: 3px solid var(--dorado, #A59765);
+    border-radius: 3px;
+    padding: 18px 20px;
+    position: relative;
+    transition: background .2s ease, border-color .2s ease;
+    box-sizing: border-box;
+  }
+
+  .csw-wf:hover { background: #EFEADD; }
+
+  .csw-wf__head {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 10px;
+  }
+
+  .csw-wf__eyebrow {
+    font-size: 10px;
+    letter-spacing: 0.2em;
+    text-transform: uppercase;
+    color: var(--dorado, #A59765);
+    font-weight: 600;
+    white-space: nowrap;
+  }
+
+  .csw-wf__rule {
+    flex: 1;
+    height: 1px;
+    background: #E3DCC9;
+  }
+
+  .csw-wf__title {
+    font-size: var(--f16, 1em);
+    font-weight: 500;
+    color: var(--color, #232930);
+    margin: 0 0 6px;
+    letter-spacing: -0.01em;
+  }
+
+  .csw-wf__sub {
+    font-size: var(--f13, 0.8125em);
+    color: #5C5A54;
+    margin: 0 0 8px;
+    line-height: 1.5;
+  }
+
+  .csw-wf__price {
+    font-weight: 600;
+    color: var(--color, #232930);
+  }
+
+  .csw-wf__disclaimer {
+    font-size: var(--f11, 0.6875em);
+    color: #9A9A9A;
+    margin: 10px 0 0;
+    line-height: 1.5;
+  }
+
+  .csw-wf__action {
+    display: inline-flex;
+    align-items: center;
+    gap: 10px;
+    margin-top: 12px;
+    padding: 9px 13px;
+    background: #fff;
+    border: 1px solid #E3DCC9;
+    border-radius: 2px;
+    transition: border-color .18s ease, background .18s ease;
+    user-select: none;
+    white-space: nowrap;
+  }
+
+  .csw-wf__chip {
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--color, #232930);
+    transition: color .18s ease;
+  }
+
+  #csw-waterproof {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 20px;
+    height: 20px;
+    margin: 0;
+    border: 1.5px solid var(--dorado, #A59765);
+    border-radius: 2px;
+    background: #fff;
+    cursor: pointer;
+    position: relative;
+    transition: background .18s ease;
+    flex-shrink: 0;
+  }
+
+  #csw-waterproof:checked {
+    background: var(--dorado, #A59765);
+  }
+
+  #csw-waterproof:checked::after {
+    content: "";
+    position: absolute;
+    left: 6px;
+    top: 2px;
+    width: 5px;
+    height: 10px;
+    border: solid #fff;
+    border-width: 0 1.5px 1.5px 0;
+    transform: rotate(45deg);
+  }
+
+  /* :has() checked state — progressively enhanced */
+  .csw-wf:has(#csw-waterproof:checked) {
+    background: #EFE8D2;
+    border-color: var(--dorado, #A59765);
+  }
+
+  .csw-wf:has(#csw-waterproof:checked) .csw-wf__action {
+    background: var(--dorado, #A59765);
+    border-color: var(--dorado, #A59765);
+  }
+
+  .csw-wf:has(#csw-waterproof:checked) .csw-wf__chip {
+    color: #fff;
+  }
+
+  .csw-wf:has(#csw-waterproof:checked) #csw-waterproof {
+    background: #fff;
+    border-color: #fff;
+  }
+
+  .csw-wf:has(#csw-waterproof:checked) #csw-waterproof::after {
+    border-color: var(--dorado, #A59765);
+  }
+
+  /* JS fallback for browsers without :has() */
+  .csw-wf.csw-wf--checked {
+    background: #EFE8D2;
+    border-color: var(--dorado, #A59765);
+  }
+
+  .csw-wf.csw-wf--checked .csw-wf__action {
+    background: var(--dorado, #A59765);
+    border-color: var(--dorado, #A59765);
+  }
+
+  .csw-wf.csw-wf--checked .csw-wf__chip {
+    color: #fff;
+  }
+
+  .csw-wf.csw-wf--checked #csw-waterproof {
+    background: #fff;
+    border-color: #fff;
+  }
+
+  .csw-wf.csw-wf--checked #csw-waterproof::after {
+    border-color: var(--dorado, #A59765);
+  }
+
+  /* ── Bordes decorativos ──────────────────────────────────────── */
+  #csw-bordes-section {
+    margin-bottom: 20px;
+  }
+
+  .csw-bordes-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-end;
+    margin-bottom: 14px;
+    padding-bottom: 12px;
+    border-bottom: 1px solid var(--crema, #E3DECC);
+  }
+
+  .csw-bordes-ttl {
+    font-size: var(--f14, 0.875em);
+    font-weight: 500;
+    color: var(--color, #232930);
+    margin: 0;
+  }
+
+  .csw-bordes-ttl small {
+    display: block;
+    font-size: var(--f11, 0.6875em);
+    color: var(--grisoscuro, #9A9A9A);
+    font-weight: 400;
+    margin-top: 3px;
+    letter-spacing: 0.02em;
+  }
+
+  .csw-bordes-sel {
+    font-size: var(--f11, 0.6875em);
+    color: var(--grisoscuro, #9A9A9A);
+    white-space: nowrap;
+    margin-left: 12px;
+    flex-shrink: 0;
+  }
+
+  .csw-bordes-sel b {
+    color: var(--color, #232930);
+    font-weight: 500;
+  }
+
+  .csw-bordes-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 12px;
+  }
+
+  .csw-b-card {
+    position: relative;
+    cursor: pointer;
+    background: #fff;
+    border: 1px solid var(--crema, #E3DECC);
+    border-radius: 3px;
+    overflow: hidden;
+    transition: transform .2s ease, border-color .2s ease, box-shadow .2s ease;
+    display: flex;
+    flex-direction: column;
+  }
+
+  .csw-b-card:hover {
+    transform: translateY(-2px);
+    border-color: #C9C3B2;
+    box-shadow: 0 6px 20px -10px rgba(35,41,48,.18);
+  }
+
+  .csw-b-thumb {
+    aspect-ratio: 4 / 3;
+    overflow: hidden;
+    position: relative;
+    background: var(--crema, #E3DECC);
+  }
+
+  .csw-b-thumb img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+  }
+
+  .csw-b-badge {
+    position: absolute;
+    top: 10px;
+    left: 10px;
+    background: rgba(255,255,255,0.92);
+    color: var(--color, #232930);
+    font-size: 9px;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    font-weight: 600;
+    padding: 5px 8px;
+    border-radius: 2px;
+    opacity: 0;
+    transform: translateY(-4px);
+    transition: opacity .25s ease, transform .25s ease;
+  }
+
+  .csw-b-meta {
+    padding: 11px 12px 13px;
+    border-top: 1px solid var(--crema, #E3DECC);
+    transition: background .2s ease, border-color .2s ease;
+  }
+
+  .csw-b-meta .csw-b-nombre {
+    font-size: 9.5px;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--grisoscuro, #9A9A9A);
+    font-weight: 500;
+    margin: 0 0 3px;
+  }
+
+  .csw-b-meta .csw-b-tipo {
+    font-size: var(--f14, 0.875em);
+    font-weight: 500;
+    color: var(--color, #232930);
+    margin: 0;
+    transition: color .2s ease;
+  }
+
+  .csw-b-card.is-selected {
+    border-color: var(--dorado, #A59765);
+  }
+
+  .csw-b-card.is-selected .csw-b-thumb::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    border: 2px solid var(--dorado, #A59765);
+    pointer-events: none;
+  }
+
+  .csw-b-card.is-selected .csw-b-meta {
+    background: #F4F0E8;
+    border-top-color: var(--dorado, #A59765);
+  }
+
+  .csw-b-card.is-selected .csw-b-meta .csw-b-tipo {
+    color: var(--dorado, #A59765);
+  }
+
+  .csw-b-card.is-selected .csw-b-badge {
+    opacity: 1;
+    transform: translateY(0);
+  }
+
+  /* ── Resumen ─────────────────────────────────────────────────── */
+  .csw-resumen {
+    background: var(--grisclaro, #f2f2f2);
+    padding: 14px 16px;
+    margin-bottom: 16px;
+    font-size: var(--f13, 0.8125em);
+    line-height: 2;
+    color: var(--color, #232930);
+  }
+
+  .csw-resumen strong {
+    color: var(--dorado, #A59765);
+  }
+
+  .csw-total {
+    font-weight: 600;
+    font-size: var(--f14, 0.875em);
+    padding-top: 6px;
+    border-top: 1px solid var(--crema, #E3DECC);
+    margin-top: 4px;
+  }
+
+  .csw-total strong {
+    font-size: var(--f16, 1em);
+  }
+
+  .csw-btn {
+    display: block;
+    width: 100%;
+    padding: 16px 15px;
+    background: var(--negro, #000000);
+    color: var(--blanco, #ffffff);
+    border: none;
+    font-size: var(--f13, 0.8125em);
+    font-weight: 600;
+    text-align: center;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    cursor: pointer;
+    transition: var(--t025, all 0.25s ease-out);
+  }
+
+  .csw-btn:hover:not(:disabled) {
+    opacity: 0.6;
+  }
+
+  .csw-btn:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+  }
+
+  .csw-error {
+    margin-top: 10px;
+    font-size: var(--f12, 0.75em);
+    color: var(--rojo, #d2451e);
+    text-align: center;
+  }
+
+  /* Stock por pliego (Fase 6) */
+  .csw-stock {
+    margin-top: 10px;
+    font-size: var(--f12, 0.75em);
+    color: var(--rojo, #d2451e);
+    text-align: center;
+    line-height: 1.4;
+  }
+
+  .csw-stock--agotado {
+    font-weight: 700;
+    letter-spacing: 0.5px;
+    text-transform: uppercase;
+  }
+
+  @media (max-width: 480px) {
+    .csw-container { padding: 16px; }
+
+    .csw-wf__action {
+      display: flex;
+      width: 100%;
+      justify-content: space-between;
+      box-sizing: border-box;
+    }
+
+    /* Bordes: horizontal cards on mobile */
+    .csw-bordes-grid {
+      grid-template-columns: 1fr;
+    }
+
+    .csw-b-card {
+      flex-direction: row;
+    }
+
+    .csw-b-thumb {
+      aspect-ratio: unset;
+      width: 90px;
+      flex-shrink: 0;
+    }
+
+    .csw-b-meta {
+      flex: 1;
+      border-top: none;
+      border-left: 1px solid var(--crema, #E3DECC);
+    }
+
+    .csw-b-card.is-selected .csw-b-meta {
+      border-left-color: var(--dorado, #A59765);
+    }
+
+    .csw-b-badge {
+      top: 7px;
+      left: 7px;
+      padding: 4px 6px;
+      font-size: 8px;
+    }
+  }
+</style>
+
+<script>
+(function () {
+  'use strict';
+
+  var APP_URL = 'https://dturkia-custom-size.vercel.app';
+
+  var fmt = new Intl.NumberFormat('es-CL', { style: 'decimal', maximumFractionDigits: 0 });
+
+  function eid(id) { return document.getElementById(id); }
+
+  function mostrarNativos() {
+    document.documentElement.classList.remove('csw-natives-hidden');
+  }
+
+  /* ─── Stock por pliego (Fase 6) ────────────────────────────────────────────
+     El límite real NO son "ancho máximo" y "largo máximo" por separado, sino el
+     PAR (ancho, largo) conjuntamente: una pieza puede caber en un rollo y no en
+     otro aunque ambas dimensiones "alcancen" por separado.
+
+     `capacidades` llega de /api/precio como [{anchoCm, largoMaxCm}]:
+       · undefined → la trama no tiene pliegos cargados → SIN control de stock,
+                     el widget se comporta exactamente como antes.
+       · []        → tiene pliegos pero no queda material → AGOTADO.
+       · [...]     → se valida el par en cada movimiento de slider.
+
+     Se evalúan las DOS orientaciones porque la alfombra puede cortarse rotada.
+     Esto es solo un filtro de UX: el checkout revalida siempre, el frontend
+     nunca es autoridad sobre el stock.
+  --------------------------------------------------------------------------- */
+  function cabeEnCapacidades(anchoCm, altoCm, capacidades) {
+    if (!capacidades || !capacidades.length) return false;
+    for (var i = 0; i < capacidades.length; i++) {
+      var c = capacidades[i];
+      var normal = (c.anchoCm >= anchoCm && c.largoMaxCm >= altoCm);
+      var rotada = (c.anchoCm >= altoCm  && c.largoMaxCm >= anchoCm);
+      if (normal || rotada) return true;
+    }
+    return false;
+  }
+
+  function mostrarStock(msg, esAgotado) {
+    var el = eid('csw-stock');
+    if (!el) return;
+    if (!msg) { el.style.display = 'none'; el.textContent = ''; return; }
+    el.textContent = msg;
+    el.className = 'csw-stock' + (esAgotado ? ' csw-stock--agotado' : '');
+    el.style.display = '';
+  }
+
+  function mostrarError(msg) {
+    var el = eid('csw-error');
+    if (!el) return;
+    el.textContent = msg;
+    el.style.display = msg ? '' : 'none';
+  }
+
+  /* Fórmula original preservada: m²Alfombra con techo, m²Real exacto para waterproof */
+  function calcular(precioPorM2, waterproofPorM2, waterproofActivo) {
+    var ancho = parseInt(eid('csw-ancho').value, 10);
+    var alto  = parseInt(eid('csw-alto').value,  10);
+    var m2Alfombra       = Math.ceil(ancho / 100) * Math.ceil(alto / 100);
+    var m2Real           = (ancho / 100) * (alto / 100);
+
+    var precioAlfombra   = Math.round(m2Alfombra * precioPorM2);
+    var precioWaterproof = Math.floor(m2Real * waterproofPorM2);
+    var wpChecked = waterproofActivo && eid('csw-waterproof') && eid('csw-waterproof').checked;
+
+    eid('csw-precio-alfombra').textContent = fmt.format(precioAlfombra);
+
+    if (waterproofActivo) {
+      eid('csw-waterproof-precio').textContent  = fmt.format(precioWaterproof);
+      eid('csw-precio-waterproof').textContent  = fmt.format(precioWaterproof);
+      eid('csw-resumen-waterproof').style.display = wpChecked ? '' : 'none';
+    }
+
+    var total = precioAlfombra + (wpChecked ? precioWaterproof : 0);
+    eid('csw-precio-total').textContent = fmt.format(total);
+  }
+
+  /* ── Bordes ─────────────────────────────────────────────────── */
+  var bordeSeleccionado = null;
+
+  function renderBordes(bordes, preselect) {
+    if (!bordes || !bordes.length) return;
+
+    var section = eid('csw-bordes-section');
+    var grid    = eid('csw-bordes-grid');
+    var selLbl  = eid('csw-borde-sel-label');
+    if (!section || !grid) return;
+
+    if (bordes.length === 4) {
+      grid.style.gridTemplateColumns = 'repeat(2, 1fr)';
+    }
+
+    bordes.forEach(function(borde) {
+      var key  = borde.nombre + ' - ' + borde.tipo;
+      var card = document.createElement('div');
+      card.className = 'csw-b-card';
+      card.setAttribute('role', 'button');
+      card.setAttribute('tabindex', '0');
+      card.setAttribute('aria-label', borde.nombre + ' ' + borde.tipo);
+
+      var thumb = document.createElement('div');
+      thumb.className = 'csw-b-thumb';
+
+      var img = document.createElement('img');
+      img.src = borde.imagenUrl;
+      img.alt = borde.nombre + ' ' + borde.tipo;
+      img.onerror = function() { this.style.display = 'none'; };
+
+      var badge = document.createElement('span');
+      badge.className = 'csw-b-badge';
+      badge.textContent = 'Seleccionado';
+
+      thumb.appendChild(img);
+      thumb.appendChild(badge);
+
+      var meta = document.createElement('div');
+      meta.className = 'csw-b-meta';
+
+      var elNombre = document.createElement('p');
+      elNombre.className = 'csw-b-nombre';
+      elNombre.textContent = borde.nombre;
+
+      var elTipo = document.createElement('p');
+      elTipo.className = 'csw-b-tipo';
+      elTipo.textContent = borde.tipo;
+
+      meta.appendChild(elNombre);
+      meta.appendChild(elTipo);
+      card.appendChild(thumb);
+      card.appendChild(meta);
+
+      if (preselect && preselect === key) {
+        card.classList.add('is-selected');
+        bordeSeleccionado = { nombre: borde.nombre, tipo: borde.tipo };
+        if (selLbl) selLbl.innerHTML = 'Seleccionado: <b>' + borde.tipo + '</b>';
+      }
+
+      function seleccionar() {
+        grid.querySelectorAll('.csw-b-card').forEach(function(c) { c.classList.remove('is-selected'); });
+        card.classList.add('is-selected');
+        bordeSeleccionado = { nombre: borde.nombre, tipo: borde.tipo };
+        if (selLbl) selLbl.innerHTML = 'Seleccionado: <b>' + borde.tipo + '</b>';
+      }
+
+      card.addEventListener('click', seleccionar);
+      card.addEventListener('keydown', function(e) {
+        if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); seleccionar(); }
+      });
+
+      grid.appendChild(card);
+    });
+
+    section.style.display = '';
+  }
+
+  function init() {
+    var root = document.getElementById('csw-root');
+    if (!root) return;
+
+    var shop      = root.dataset.shop;
+    var productId = root.dataset.productId;
+    if (!shop) return;
+
+    var urlParams     = new URLSearchParams(window.location.search);
+    var editId        = urlParams.get('csw_edit') || '';
+    var editAncho     = editId ? parseInt(urlParams.get('ancho') || '0', 10) : 0;
+    var editAlto      = editId ? parseInt(urlParams.get('alto')  || '0', 10) : 0;
+    var editWp        = editId ? urlParams.get('waterproof') === '1' : false;
+    var enModoEdicion = !!editId;
+
+    /* Recuperar borde del item siendo editado */
+    var editBorde = '';
+    if (enModoEdicion) {
+      try {
+        var rawEx = localStorage.getItem('csw_pending_orders');
+        if (rawEx) {
+          var exArr = JSON.parse(rawEx);
+          var exItem = exArr.find(function(i) { return i.id === editId; });
+          if (exItem && exItem.borde) editBorde = exItem.borde;
+        }
+      } catch (e) {}
+    }
+
+    var safetyFired = false;
+    var safetyTimer = setTimeout(function() {
+      safetyFired = true;
+      root.style.display = 'none';
+      mostrarNativos();
+    }, 8000);
+
+    var apiUrl = APP_URL + '/api/precio'
+      + '?shop='   + encodeURIComponent(shop)
+      + '&ancho=100'
+      + '&alto=100'
+      + (productId ? '&productId=' + encodeURIComponent(productId) : '');
+
+    fetch(apiUrl)
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (data) {
+        clearTimeout(safetyTimer);
+        if (safetyFired) return;
+
+        var loadingEl   = eid('csw-loading');
+        var containerEl = root.querySelector('.csw-container');
+
+        if (!data || data.error) {
+          root.style.display = 'none';
+          mostrarNativos();
+          return;
+        }
+
+        var regla            = data.regla;
+        var precioPorM2      = data.precioPorM2     || 0;
+        var waterproofPorM2  = data.waterproofPorM2 || 0;
+        var waterproofActivo = !!data.waterproofActivo;
+
+        /* Stock por pliego (Fase 6). `reglaId` viaja al item de localStorage
+           para que el checkout sepa de qué trama es la alfombra. */
+        var reglaId          = data.reglaId || '';
+        var capacidades      = data.capacidades;              /* puede ser undefined */
+        var controlDeStock   = Array.isArray(capacidades);    /* false = trama sin pliegos */
+        var tramaAgotada     = controlDeStock && capacidades.length === 0;
+
+        var sAncho   = eid('csw-ancho');
+        var sAlto    = eid('csw-alto');
+        var midAncho = Math.round((regla.minAncho + regla.maxAncho) / 2);
+        var midAlto  = Math.round((regla.minAlto  + regla.maxAlto)  / 2);
+
+        sAncho.min = regla.minAncho; sAncho.max = regla.maxAncho; sAncho.value = midAncho;
+        sAlto.min  = regla.minAlto;  sAlto.max  = regla.maxAlto;  sAlto.value  = midAlto;
+
+        eid('csw-ancho-val').textContent = midAncho;
+        eid('csw-alto-val').textContent  = midAlto;
+        eid('csw-ancho-min').textContent = regla.minAncho + ' cm';
+        eid('csw-ancho-max').textContent = regla.maxAncho + ' cm';
+        eid('csw-alto-min').textContent  = regla.minAlto  + ' cm';
+        eid('csw-alto-max').textContent  = regla.maxAlto  + ' cm';
+
+        if (enModoEdicion) {
+          if (editAncho >= parseInt(regla.minAncho) && editAncho <= parseInt(regla.maxAncho)) {
+            sAncho.value = editAncho;
+            eid('csw-ancho-val').textContent = editAncho;
+          }
+          if (editAlto >= parseInt(regla.minAlto) && editAlto <= parseInt(regla.maxAlto)) {
+            sAlto.value = editAlto;
+            eid('csw-alto-val').textContent = editAlto;
+          }
+        }
+
+        /* Aplicar textos del impermeabilizador desde API */
+        var imp        = data.textosImp || {};
+        var eyebrow    = imp.eyebrow     || 'CUIDADO · RECOMENDADO';
+        var titulo     = imp.titulo      || 'Impermeabiliza tu alfombra';
+        var descripcion= imp.descripcion || 'Protector Textil por sólo {precio}';
+        var disclaimer = imp.disclaimer  || '* Los plazos de entrega pueden ser desde 5 días hábiles';
+        var chipTexto  = imp.chipTexto   || 'AGREGAR';
+
+        if (eid('csw-wf-eyebrow'))    eid('csw-wf-eyebrow').textContent    = eyebrow;
+        if (eid('csw-wf-titulo'))     eid('csw-wf-titulo').textContent     = titulo;
+        if (eid('csw-wf-disclaimer')) eid('csw-wf-disclaimer').textContent = disclaimer;
+        if (eid('csw-wf-chip'))       eid('csw-wf-chip').textContent       = chipTexto;
+
+        /* Interpolar {precio} en la descripción */
+        var parts = descripcion.split('{precio}');
+        if (eid('csw-wf-before')) eid('csw-wf-before').textContent = parts[0] || '';
+        if (eid('csw-wf-after'))  eid('csw-wf-after').textContent  = parts[1] || '';
+        if (eid('csw-waterproof-precio') && parts.length < 2) {
+          eid('csw-waterproof-precio').style.display = 'none';
+        }
+
+        if (waterproofActivo) {
+          eid('csw-waterproof-section').style.display = '';
+          if (enModoEdicion && editWp && eid('csw-waterproof')) {
+            eid('csw-waterproof').checked = true;
+            var wfLbl = eid('csw-wf-label');
+            if (wfLbl) wfLbl.classList.add('csw-wf--checked');
+          }
+        }
+
+        calcular(precioPorM2, waterproofPorM2, waterproofActivo);
+
+        /* Stock por pliego (Fase 6): valida el PAR y habilita/deshabilita el
+           botón. Sin control de stock no toca nada. */
+        function revisarDisponibilidad() {
+          var btn = eid('csw-agregar');
+          if (!btn) return true;
+
+          if (!controlDeStock) {          /* trama sin pliegos → como siempre */
+            btn.disabled = false;
+            mostrarStock('');
+            return true;
+          }
+
+          if (tramaAgotada) {
+            btn.disabled = true;
+            mostrarStock('Agotado', true);
+            return false;
+          }
+
+          var a = parseInt(sAncho.value, 10);
+          var l = parseInt(sAlto.value,  10);
+          var cabe = cabeEnCapacidades(a, l, capacidades);
+
+          btn.disabled = !cabe;
+          mostrarStock(cabe ? '' : 'Esta medida no está disponible en esta trama.');
+          return cabe;
+        }
+
+        revisarDisponibilidad();
+
+        renderBordes(data.bordes || [], editBorde);
+
+        document.documentElement.classList.add('csw-natives-hidden');
+        if (loadingEl)   loadingEl.style.display   = 'none';
+        if (containerEl) containerEl.style.display = '';
+        root.style.display = '';
+
+        if (enModoEdicion) {
+          eid('csw-agregar').textContent = 'Actualizar medidas';
+          if (containerEl) containerEl.classList.add('csw-modo-edicion');
+        }
+
+        sAncho.addEventListener('input', function () {
+          eid('csw-ancho-val').textContent = sAncho.value;
+          calcular(precioPorM2, waterproofPorM2, waterproofActivo);
+          revisarDisponibilidad();
+        });
+        sAlto.addEventListener('input', function () {
+          eid('csw-alto-val').textContent = sAlto.value;
+          calcular(precioPorM2, waterproofPorM2, waterproofActivo);
+          revisarDisponibilidad();
+        });
+        if (waterproofActivo && eid('csw-waterproof')) {
+          eid('csw-waterproof').addEventListener('change', function () {
+            var wfLbl = eid('csw-wf-label');
+            if (wfLbl) wfLbl.classList.toggle('csw-wf--checked', this.checked);
+            calcular(precioPorM2, waterproofPorM2, waterproofActivo);
+          });
+        }
+
+        eid('csw-agregar').addEventListener('click', function () {
+          mostrarError('');
+
+          /* Stock por pliego (Fase 6): red de seguridad. El botón ya está
+             deshabilitado en este caso, pero si algo lo reactivara no debe
+             colarse una medida imposible. */
+          if (!revisarDisponibilidad()) return;
+
+          var anchoN     = parseInt(sAncho.value, 10);
+          var altoN      = parseInt(sAlto.value,  10);
+          var m2Alfombra = Math.ceil(anchoN / 100) * Math.ceil(altoN / 100);
+          var m2Real     = (anchoN / 100) * (altoN / 100);
+          var wpChecked  = waterproofActivo && eid('csw-waterproof') && eid('csw-waterproof').checked;
+
+          var precioAlfombra = Math.round(m2Alfombra * precioPorM2);
+          var precioWp       = Math.floor(m2Real * waterproofPorM2);
+          var bordeStr       = bordeSeleccionado
+            ? (bordeSeleccionado.nombre + ' - ' + bordeSeleccionado.tipo)
+            : null;
+
+          try {
+            var arr = [];
+            var rawArr = localStorage.getItem('csw_pending_orders');
+            if (rawArr) {
+              var parsedArr = JSON.parse(rawArr);
+              if (Array.isArray(parsedArr)) arr = parsedArr;
+            }
+            var rawViejo = localStorage.getItem('csw_pending_order');
+            if (rawViejo) {
+              var viejo = JSON.parse(rawViejo);
+              if (viejo && typeof viejo === 'object' && !Array.isArray(viejo)) {
+                viejo.id = viejo.id || ('legacy_' + Date.now());
+                arr = [viejo].concat(arr);
+              }
+              localStorage.removeItem('csw_pending_order');
+            }
+
+            if (enModoEdicion && editId) {
+              var reemplazado = false;
+              arr = arr.map(function(existing) {
+                if (existing.id !== editId) return existing;
+                reemplazado = true;
+                return {
+                  id:               editId,
+                  shop:             existing.shop            || shop,
+                  reglaId:          reglaId || existing.reglaId || '',
+                  ancho:            anchoN,
+                  alto:             altoN,
+                  waterproof:       !!wpChecked,
+                  precio:           precioAlfombra,
+                  waterproofPrecio: precioWp,
+                  borde:            bordeStr !== null ? bordeStr : (existing.borde || null),
+                  variantId:        existing.variantId       || root.dataset.variantId    || '',
+                  imageUrl:         existing.imageUrl        || root.dataset.imageUrl     || '',
+                  productTitle:     existing.productTitle    || (document.querySelector('.product h1') || {}).textContent || '',
+                  productHandle:    existing.productHandle   || root.dataset.productHandle || '',
+                  createdAt:        existing.createdAt       || Date.now()
+                };
+              });
+              if (!reemplazado) {
+                arr.push({
+                  id: editId, shop: shop, reglaId: reglaId, ancho: anchoN, alto: altoN,
+                  waterproof: !!wpChecked, precio: precioAlfombra, waterproofPrecio: precioWp,
+                  borde: bordeStr,
+                  variantId: root.dataset.variantId || '', imageUrl: root.dataset.imageUrl || '',
+                  productTitle: (document.querySelector('.product h1') || {}).textContent || '',
+                  productHandle: root.dataset.productHandle || '', createdAt: Date.now()
+                });
+              }
+            } else {
+              var itemId = shop + '_' + (root.dataset.variantId || '') + '_' + Date.now();
+              arr.push({
+                id: itemId, shop: shop, reglaId: reglaId, ancho: anchoN, alto: altoN,
+                waterproof: !!wpChecked, precio: precioAlfombra, waterproofPrecio: precioWp,
+                borde: bordeStr,
+                variantId: root.dataset.variantId || '', imageUrl: root.dataset.imageUrl || '',
+                productTitle: (document.querySelector('.product h1') || {}).textContent || '',
+                productHandle: root.dataset.productHandle || '', createdAt: Date.now()
+              });
+            }
+            localStorage.setItem('csw_pending_orders', JSON.stringify(arr));
+          } catch (e) {
+            mostrarError('Error al guardar el pedido. Por favor intenta nuevamente.');
+            return;
+          }
+
+          if (enModoEdicion) {
+            history.replaceState({}, '', window.location.pathname);
+            eid('csw-agregar').textContent = 'Agregar a la bolsa';
+            if (containerEl) containerEl.classList.remove('csw-modo-edicion');
+            enModoEdicion = false;
+          }
+
+          if (typeof update_mini_cart === 'function') {
+            update_mini_cart(true);
+          }
+        });
+      })
+      .catch(function () {
+        clearTimeout(safetyTimer);
+        var root = document.getElementById('csw-root');
+        if (root) root.style.display = 'none';
+        mostrarNativos();
+      });
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', init);
+  } else {
+    init();
+  }
+})();
+</script>
