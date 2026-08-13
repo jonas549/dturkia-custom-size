@@ -46,6 +46,7 @@ model ReglaPersonalizada {
   productIds       String[] @default([])
   bordes           Json     @default("[]")
   createdAt        DateTime @default(now())
+  pliegos          Pliego[]
 }
 
 model PedidoCustom {
@@ -61,6 +62,69 @@ model PedidoCustom {
   tipo         String   @default("medida")
   borde        String?
   createdAt    DateTime @default(now())
+
+  // --- Stock por pliego (Fase 1) ---
+  pliegoId     String?
+  pliegoCodigo String   @default("") // snapshot — sobrevive si el pliego se da de baja
+  rotada       Boolean  @default(false)
+  orderName    String   @default("") // "#D1042" — cruza orden <-> pliego en el admin (decisión 5)
+}
+
+// ---------------------------------------------------------------------------
+// Stock por pliego — ver BITACORA_STOCK_PLIEGOS_2026-08-12.md §4
+// Todas las medidas en centímetros enteros (Int). Nunca metros con decimales:
+// evita drift de float en las restas acumuladas. El admin muestra/pide metros
+// y convierte en el borde.
+// ---------------------------------------------------------------------------
+
+/// Un pliego = un rollo físico individual. Ceniza = 11 filas.
+model Pliego {
+  id              String             @id @default(cuid())
+  shop            String
+  reglaId         String // = la trama
+  regla           ReglaPersonalizada @relation(fields: [reglaId], references: [id], onDelete: Restrict)
+  codigo          String // "CEN-400-01" — autogenerado, editable
+  anchoCm         Int
+  largoTotalCm    Int
+  /// total − confirmado − ajustes. NO baja con las reservas: el stock se ocupa, no se resta.
+  largoRestanteCm Int
+  activo          Boolean            @default(true) // false = agotado / de baja / dañado
+  nota            String             @default("")
+  createdAt       DateTime           @default(now())
+
+  @@unique([shop, codigo])
+  @@index([shop, reglaId, activo, anchoCm]) // índice que usa el selector
+}
+
+/// Ocupación temporal del pliego. Una reserva 'pendiente' de más de 15 min
+/// deja de ocupar sola: es una condición de tiempo en el WHERE, sin cron.
+model ReservaPliego {
+  id            String    @id @default(cuid())
+  shop          String
+  pliegoId      String
+  reglaId       String
+  refId         String    @unique // = id del item de localStorage → idempotencia
+  largoCm       Int // lo que consume del pliego
+  anchoPedidoCm Int
+  altoPedidoCm  Int
+  rotada        Boolean   @default(false)
+  estado        String    @default("pendiente") // pendiente | confirmada | anulada
+  draftOrderId  String?
+  createdAt     DateTime  @default(now()) // + 15 min = vencimiento
+  resueltaAt    DateTime?
+
+  @@index([pliegoId, estado, createdAt]) // índice del cálculo de disponibilidad
+}
+
+/// Solo altas y ajustes manuales — auditoría. El consumo por venta vive en ReservaPliego.
+model MovimientoPliego {
+  id        String   @id @default(cuid())
+  shop      String
+  pliegoId  String
+  largoCm   Int
+  motivo    String // 'alta' | 'ajuste' | 'baja'
+  nota      String   @default("")
+  createdAt DateTime @default(now())
 }
 
 model ReglaImpermeabilizador {
