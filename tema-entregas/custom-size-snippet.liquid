@@ -656,6 +656,18 @@
 (function () {
   'use strict';
 
+  /* ─── VERSIÓN DEL SNIPPET ──────────────────────────────────────────────────
+     El tema no está en git y se copia a mano: sin esto no hay forma de saber
+     desde fuera qué versión está viva. Si esta línea NO sale en la consola de
+     la página de producto, el archivo pegado en el editor de temas NO es éste.
+     Ya pasó una vez (2026-08-13): la tienda seguía sirviendo la versión
+     anterior y el widget validaba con la regla vieja, permitiendo medidas
+     imposibles.
+  --------------------------------------------------------------------------- */
+  var CSW_VERSION = '2026-08-13-escalones';
+  console.log('%c[CSW] snippet ' + CSW_VERSION,
+              'background:#111;color:#7CFC00;padding:2px 8px;border-radius:3px;font-weight:bold');
+
   var APP_URL = 'https://dturkia-custom-size.vercel.app';
 
   var fmt = new Intl.NumberFormat('es-CL', { style: 'decimal', maximumFractionDigits: 0 });
@@ -710,12 +722,31 @@
   }
 
   function cabeEnCapacidades(anchoCm, altoCm, capacidades) {
-    if (!capacidades || !capacidades.length) return false;
+    if (!capacidades || !capacidades.length) {
+      console.log('[CSW] validando ' + anchoCm + 'x' + altoCm + ' => sin escalera de capacidades');
+      return false;
+    }
+
     var normal = escalonPara(anchoCm, capacidades);   /* consume altoCm de largo */
     var rotada = escalonPara(altoCm,  capacidades);   /* consume anchoCm de largo */
-    if (normal && normal.largoMaxCm >= altoCm)  return true;
-    if (rotada && rotada.largoMaxCm >= anchoCm) return true;
-    return false;
+    var okNormal = !!(normal && normal.largoMaxCm >= altoCm);
+    var okRotada = !!(rotada && rotada.largoMaxCm >= anchoCm);
+    var cabe     = okNormal || okRotada;
+
+    /* Un solo log con TODO lo que hace falta para auditar la decisión:
+       qué escalón le tocó a cada orientación, cuánto largo hay en ese escalón
+       y cuánto pide la pieza. Si esto no aparece al mover el slider, es que la
+       validación no se está ejecutando. */
+    console.log(
+      '[CSW] validando ' + anchoCm + 'x' + altoCm +
+      ' | normal: escalon(' + anchoCm + ')=' + (normal ? normal.anchoCm : '—') +
+        ' capEscalon=' + (normal ? normal.largoMaxCm : 0) + ' pedido=' + altoCm + ' → ' + (okNormal ? 'ok' : 'no') +
+      ' | rotada: escalon(' + altoCm + ')=' + (rotada ? rotada.anchoCm : '—') +
+        ' capEscalon=' + (rotada ? rotada.largoMaxCm : 0) + ' pedido=' + anchoCm + ' → ' + (okRotada ? 'ok' : 'no') +
+      ' => ' + (cabe ? 'DISPONIBLE' : 'NO DISPONIBLE, deshabilitando botón'),
+    );
+
+    return cabe;
   }
 
   /* El aviso tiene que salir DEBAJO DE LOS SLIDERS, que es donde el cliente
@@ -925,6 +956,21 @@
            largoMaxCm 0) porque son los que definen la escalera. */
         var tramaAgotada     = controlDeStock && !hayMaterial(capacidades);
 
+        if (!controlDeStock) {
+          console.log('[CSW] capacidades NO vino en /api/precio → esta trama no tiene pliegos ' +
+                      'cargados, el widget NO controla stock (comportamiento de siempre)');
+        } else {
+          console.log('[CSW] capacidades recibidas:', JSON.stringify(capacidades));
+          var escalera = [], desde = 1;
+          for (var ci = 0; ci < capacidades.length; ci++) {
+            escalera.push('ancho ' + desde + '-' + capacidades[ci].anchoCm +
+                          ' → largo ≤ ' + capacidades[ci].largoMaxCm);
+            desde = capacidades[ci].anchoCm + 1;
+          }
+          console.log('[CSW] escalones: ' + escalera.join('  ·  ') +
+                      (tramaAgotada ? '  ·  SIN MATERIAL EN NINGUNO (agotada)' : ''));
+        }
+
         var sAncho   = eid('csw-ancho');
         var sAlto    = eid('csw-alto');
         var midAncho = Math.round((regla.minAncho + regla.maxAncho) / 2);
@@ -1012,6 +1058,24 @@
 
         revisarDisponibilidad();
 
+        /* Red de seguridad: si algo del tema vuelve a habilitar el botón por su
+           cuenta, se re-deshabilita. Solo actúa cuando la medida NO es vendible,
+           así que nunca pelea con el flujo normal. */
+        if (controlDeStock && window.MutationObserver) {
+          var btnRef = eid('csw-agregar');
+          if (btnRef) {
+            new MutationObserver(function () {
+              if (btnRef.disabled) return;
+              var a = parseInt(sAncho.value, 10);
+              var l = parseInt(sAlto.value,  10);
+              if (tramaAgotada || !cabeEnCapacidades(a, l, capacidades)) {
+                console.log('[CSW] el botón fue re-habilitado por fuera → se deshabilita de nuevo');
+                btnRef.disabled = true;
+              }
+            }).observe(btnRef, { attributes: true, attributeFilter: ['disabled'] });
+          }
+        }
+
         renderBordes(data.bordes || [], editBorde);
 
         document.documentElement.classList.add('csw-natives-hidden');
@@ -1024,16 +1088,29 @@
           if (containerEl) containerEl.classList.add('csw-modo-edicion');
         }
 
-        sAncho.addEventListener('input', function () {
+        /* Un solo manejador para los dos sliders, enganchado por TODAS las vías.
+           El tema (Merlí, OS 1.0) mueve controles con jQuery y propaga cambios
+           con .trigger('change'), que NO despierta un addEventListener nativo.
+           Por eso se escucha 'input' + 'change' nativos y, si jQuery está
+           presente, también sus eventos. Es idempotente: si llegan dos avisos
+           del mismo movimiento, se recalcula lo mismo dos veces y ya. */
+        function sincronizarMedidas() {
           eid('csw-ancho-val').textContent = sAncho.value;
+          eid('csw-alto-val').textContent  = sAlto.value;
           calcular(precioPorM2, waterproofPorM2, waterproofActivo);
           revisarDisponibilidad();
-        });
-        sAlto.addEventListener('input', function () {
-          eid('csw-alto-val').textContent = sAlto.value;
-          calcular(precioPorM2, waterproofPorM2, waterproofActivo);
-          revisarDisponibilidad();
-        });
+        }
+
+        sAncho.addEventListener('input',  sincronizarMedidas);
+        sAncho.addEventListener('change', sincronizarMedidas);
+        sAlto.addEventListener('input',   sincronizarMedidas);
+        sAlto.addEventListener('change',  sincronizarMedidas);
+
+        if (window.jQuery) {
+          window.jQuery(sAncho).on('input change', sincronizarMedidas);
+          window.jQuery(sAlto).on('input change', sincronizarMedidas);
+          console.log('[CSW] jQuery detectado → sliders también enganchados por jQuery');
+        }
         if (waterproofActivo && eid('csw-waterproof')) {
           eid('csw-waterproof').addEventListener('change', function () {
             var wfLbl = eid('csw-wf-label');

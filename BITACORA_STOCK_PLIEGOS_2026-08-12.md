@@ -1207,6 +1207,64 @@ verificado (aviso tras el slider de alto, antes del impermeabilizador) ✅.
 > snippet viejo en el tema, el widget seguiría ofreciendo el salto de escalón y el checkout lo
 > rechazaría. Hoy es inocuo porque `PLIEGOS_MODO` no existe en Vercel (= `off`), pero **el snippet
 > debe pegarse antes de poner `log` o `bloqueo`.**
+>
+> **Esa ventana se materializó el mismo día. Ver el apartado siguiente.**
+
+---
+
+### 🔴 INCIDENTE — «el widget no valida nada» (2026-08-13)
+
+**Síntoma reportado:** en la tienda, con los rollos de 300 en 0.70 m, medidas como **264×1051** y
+**156×1051** no bloqueaban el botón. Se probó en incógnito y el snippet nuevo se daba por pegado.
+
+**Causa raíz — confirmada, no supuesta:** **la tienda seguía sirviendo el snippet ANTERIOR.** El
+paste no llegó al tema publicado. Evidencia recogida directamente de producción:
+
+1. `GET /api/precio` real para ese producto devuelve **correctamente**
+   `capacidades: [{100,2100},{300,70},{400,2010}]` y `reglaId`. El backend nunca fue el problema.
+2. El HTML servido por `https://dturkia.com/products/alfombra-test-2` **no contiene** `escalonPara`,
+   `hayMaterial` ni `colocarAvisoStock`, y **sí contiene** `c.anchoCm >= anchoCm` — la regla vieja.
+   El `<p id="csw-stock">` seguía después del botón (markup viejo).
+3. El bloque `<script>` servido es **idéntico byte a byte** al de la entrega de la Fase 6
+   (18 620 bytes; la versión de escalones son 20 960).
+
+**Por qué el síntoma parecía «no valida nada»:** la validación **sí corría**, con la regla vieja
+`∃ cap: anchoCm >= ancho && largoMax >= alto`. Para 264×1051 el rollo de 400 la satisface
+(`400 >= 264` y `2010 >= 1051`), así que devolvía "cabe". La regla vieja solo bloquea cuando **ninguna**
+capacidad alcanza, por eso casos como 350×2100 sí se bloqueaban y estos no.
+
+Reproducido en frío con las capacidades reales, ejecutando **las dos funciones extraídas de sus
+archivos**: 264×1051 y 156×1051 → vieja **permite**, nueva **bloquea**. El motor del backend ya
+respondía `SIN_STOCK` a ambas.
+
+**Descartado:** que `/api/precio` no devolviera capacidades (las devuelve), que el widget saliera de
+la app extension (`extensions/` no contiene nada del JS de stock: el widget vivo sale del snippet del
+tema), y que fuera caché.
+
+#### Fix — que el error no pueda volver a ser invisible
+
+El arreglo de fondo es pegar el archivo correcto. Como el tema no está en git y esto ya ha fallado
+dos veces, el snippet ahora **se identifica solo**:
+
+| # | Bloque | Qué se añadió |
+|---|---|---|
+| 1 | JS, primera línea del IIFE | `CSW_VERSION = '2026-08-13-escalones'` y un `console.log` destacado. **Si esa línea no sale en la consola del producto, el archivo pegado no es el vigente.** Diagnóstico en 2 segundos |
+| 2 | JS, `.then` de `/api/precio` | `[CSW] capacidades recibidas: …` + la escalera ya interpretada (`ancho 1-100 → largo ≤ 2100 · …`), o el aviso de que la trama no tiene pliegos |
+| 3 | JS, `cabeEnCapacidades()` | Un log por validación con el escalón de cada orientación, su capacidad y el veredicto: `[CSW] validando 264x1051 \| normal: escalon(264)=300 capEscalon=70 pedido=1051 → no \| rotada: escalon(1051)=— … => NO DISPONIBLE, deshabilitando botón` |
+| 4 | JS, listeners de los sliders | Unificados en `sincronizarMedidas()` y enganchados a `input` **y** `change` nativos **y**, si `window.jQuery` existe, también por jQuery. El tema Merlí propaga cambios con `.trigger('change')`, que no despierta un `addEventListener` nativo — no era la causa aquí, pero es una vía real de fallo en este tema |
+| 5 | JS, tras la primera validación | `MutationObserver` sobre el `disabled` del botón: si algo lo re-habilita por fuera y la medida no es vendible, se vuelve a deshabilitar |
+
+**Validación ejecutada:** sintaxis de los dos bloques ✅ · 264×1051 y 156×1051 → vieja permite /
+nueva bloquea ✅ · no se rompe lo vendible (350×300, 100×300, 90×2000, 250×350 rotada) ✅ ·
+250×200 y 350×2100 siguen bloqueados ✅ · motor del backend `SIN_STOCK` en los dos casos ✅ ·
+0 reservas residuales.
+
+**Además:** `tema-dturkia/snippets/custom-size-snippet.liquid` (la copia local del tema, que estaba en
+la versión vieja e idéntica a la entrega de la Fase 6) quedó sincronizada con la entrega nueva.
+
+> **Cómo comprobar de un vistazo qué versión está viva:** abrir la página de producto → consola →
+> buscar `[CSW] snippet`. Si no aparece, o aparece otra fecha, el tema tiene un archivo distinto al
+> de `tema-entregas/`.
 
 ---
 
@@ -1293,7 +1351,7 @@ registrado en `MovimientoPliego` con nota obligatoria. Es **corregible, no autom
 |---|---|
 | **Fase actual** | ✅ **Fases 1-7 COMPLETADAS** (2026-08-13) + **cambio de lógica a escalones** (§5.0). Todo el código está en producción; falta activarlo. |
 | **Bloqueantes** | Ninguno. |
-| **Acción pendiente de Jonas (2 cosas)** | **(a)** Pegar en el editor de temas de Shopify: `snippets/custom-size-snippet.liquid` (**versión con escalones — la anterior quedó obsoleta**) y `assets/functions.js` (copias en `tema-entregas/`; `functions.js` no cambió con el paso a escalones). **(b)** Crear `PLIEGOS_MODO=log` en Vercel → Settings → Environment Variables → Production, y redeploy. |
+| **Acción pendiente de Jonas (2 cosas)** | **(a)** Pegar en el editor de temas de Shopify `snippets/custom-size-snippet.liquid` (versión `2026-08-13-escalones`) **y comprobar en la consola del producto que sale `[CSW] snippet 2026-08-13-escalones`** — el 2026-08-13 el paste no llegó al tema publicado y la tienda siguió validando con la regla vieja. `assets/functions.js` no cambió. **(b)** Crear `PLIEGOS_MODO=log` en Vercel → Settings → Environment Variables → Production, y redeploy. |
 | **Estado si no se hace nada** | Con `PLIEGOS_MODO` sin definir el modo es `off`: el control de stock no hace absolutamente nada y la tienda se comporta igual que antes. Nada está activo por accidente. |
 | **Datos en producción** | 11 pliegos colgados de `Alfombra test 2` (`cmoipz5lp0000l704zvl3nx6h`, topes 400×2100 cm) · **13 659 cm restantes** tras las compras de prueba de Jonas (100→2100×4 · **300→70×4** · 400→959/2010/2010) · 5 reservas `confirmada` · escalones vigentes: **1–100 → 2100 · 101–300 → 70 · 301–400 → 2010** |
 | **Pendiente de QA** | En `MODO=log`: **ancho 250 debe bloquearse** (su escalón está en 70 cm) mientras 301–400 sigue vendiendo, slider bloqueando `350×2100`, compra pagada, compra abandonada, y carrito mixto. Logs `[PLIEGOS]` en Vercel + pestañas Reservas y Cortes. |
@@ -1320,6 +1378,7 @@ registrado en `MovimientoPliego` con nota obligatoria. Es **corregible, no autom
 | 2026-08-13 | **7** | ✅ **FASE 7 COMPLETADA** — `functions.js`: envía `id` + `reglaId`, muestra el error real de stock | Solo 2 zonas tocadas. Copia versionada en `tema-entregas/`. La idempotencia queda arreglada incluso para items viejos (el snippet siempre guardó `id`; faltaba enviarlo) → levanta la advertencia de la Fase 4. **Pendiente: que Jonas lo pegue en el editor de temas.** |
 | 2026-08-13 | **§5.0** | 🔶 **CAMBIO DE LÓGICA — escalones por ancho de rollo** | Regla de negocio nueva: un pedido solo usa rollos de **su** escalón (el primer ancho >= al requerido) y un escalón seco **no** salta al de arriba. Cambiado a la vez en `capacidades()`, en la sentencia atómica de `reservar()` y en el snippet, para que widget y checkout no se contradigan. Rotación: cada orientación usa el escalón del lado que va a lo ancho del rollo (decisión de Jonas — simétrico en ancho/alto). `capacidades()` pasa a devolver **la escalera completa**, incluidos los anchos secos, y "Agotado" se detecta con `hayMaterial()`. Verificado contra la base real: 250 se bloquea con los de 300 en 70 cm, 301–400 sigue vendiendo, y **ningún caso de las Fases 2–4 cambió de resultado**. **Pendiente: que Jonas pegue el snippet nuevo.** |
 | 2026-08-13 | **UI** | ✅ Aviso de "medida no disponible" movido **debajo de los sliders** | Antes salía junto al botón y obligaba a hacer scroll. Ahora aparece entre el slider de alto y el bloque del impermeabilizador, como caja con fondo y borde. El botón se sigue deshabilitando igual. Incluye reubicación en runtime por si el markup del tema divergió. |
+| 2026-08-13 | **🔴** | **Incidente: «el widget no valida nada»** — la tienda servía el snippet ANTERIOR | El paste no llegó al tema publicado: el HTML de producción no tenía `escalonPara` y su bloque `<script>` era idéntico byte a byte al de la Fase 6. `/api/precio` devolvía las capacidades correctamente; el backend nunca falló. Con la regla vieja, 264×1051 pasaba porque el rollo de 400 satisface `>=`. **Fix:** el snippet ahora declara `CSW_VERSION` y la imprime en consola, más logs `[CSW]` de capacidades y de cada validación, listeners por `input`+`change`+jQuery, y `MutationObserver` que re-deshabilita el botón. |
 | | **8** | ⬜ Pendiente | |
 
 ### Cómo actualizar esta bitácora
