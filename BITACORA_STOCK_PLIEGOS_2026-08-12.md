@@ -2,7 +2,7 @@
 
 **Proyecto:** dturkia-custom-size (D'Turkia · `dturkia.myshopify.com`)
 **Iniciada:** 2026-08-12
-**Estado:** ✅ **Fase 1 COMPLETADA** (migración aplicada + 11 pliegos sembrados y validados)
+**Estado:** ✅ **Fases 1 y 2 COMPLETADAS** — motor validado contra la base real. Siguiente: Fase 3 (admin)
 **Última actualización:** 2026-08-13
 
 > ### ⚠️ LEER ANTES DE TOCAR NADA — sobre "Ceniza"
@@ -417,7 +417,14 @@ WITH cand AS (
              AS o("anchoReq", largo, rotada)
   WHERE p.shop = ${shop} AND p."reglaId" = ${reglaId} AND p.activo
     AND p."anchoCm" >= o."anchoReq"
-  ORDER BY (p."anchoCm" - o."anchoReq") ASC, p."anchoCm" ASC, disponible ASC, p.id ASC
+    -- ↓↓↓ CORREGIDO EN FASE 2: el filtro de largo va AQUÍ, antes del ORDER BY/LIMIT
+    AND p."largoRestanteCm" - COALESCE((
+          SELECT SUM(r2."largoCm") FROM "ReservaPliego" r2
+          WHERE r2."pliegoId" = p.id AND r2.estado = 'pendiente'
+            AND r2."createdAt" > NOW() - make_interval(mins => 15)
+        ), 0) >= o.largo
+  ORDER BY (p."anchoCm" - o."anchoReq") ASC, p."anchoCm" ASC,
+           disponible ASC, p.codigo ASC, p.id ASC
   LIMIT 1
   FOR UPDATE OF p SKIP LOCKED
 )
@@ -426,10 +433,24 @@ INSERT INTO "ReservaPliego" (id, shop, "pliegoId", "reglaId", "refId", "largoCm"
 SELECT ${id}, ${shop}, c.id, ${reglaId}, ${refId}, c.largo,
        ${ancho}, ${alto}, c.rotada, 'pendiente', NOW()
 FROM cand c
-WHERE c.disponible >= c.largo
 ON CONFLICT ("refId") DO NOTHING
 RETURNING "pliegoId", "largoCm", rotada;
 ```
+
+> ### 🔴 Corrección de la Fase 2 — el filtro de largo estaba en el sitio equivocado
+>
+> La versión original de este documento tenía `WHERE c.disponible >= c.largo` en el `SELECT` de
+> **fuera** del CTE, es decir **después del `LIMIT 1`**. Consecuencia: si el pliego de ancho más
+> cercano se había quedado sin largo, la consulta devolvía **0 filas (= SIN_STOCK)** en vez de pasar
+> al siguiente candidato.
+>
+> **Reproducido contra la DB real:** con los 4 rollos de 300 cm agotados, un pedido de 250×350
+> devolvía `SIN_STOCK` **teniendo 20.10 m libres en cada rollo de 400**. Con el filtro dentro del
+> CTE elige `CEN-400-01` rotada (merma 50).
+>
+> El `LIMIT 1` solo es correcto si **todos** los candidatos que llegan al `ORDER BY` son ya viables.
+> Añadido también `p.codigo ASC` como penúltimo criterio de desempate: con `id` siendo un UUID, el
+> rollo elegido entre varios idénticos era arbitrario y el QA no podía predecirlo.
 
 - **0 filas devueltas = no hay pliego que sirva** (o el `refId` ya estaba reservado → idempotencia).
 - `FOR UPDATE OF p SKIP LOCKED` serializa dos compras simultáneas sobre el mismo rollo **sin
@@ -438,9 +459,15 @@ RETURNING "pliegoId", "largoCm", rotada;
   ocupado por la primera, así que dos piezas que compiten por el mismo rollo se resuelven solas.
 - **Compensación:** `UPDATE ReservaPliego SET estado='anulada' WHERE refId = ANY(...)`.
 
-> ⚠️ A validar empíricamente en la Fase 2: la posición exacta de `FOR UPDATE OF p` dentro del CTE
-> (Postgres tiene restricciones con agregados) y que Neon HTTP ejecuta cada sentencia como
-> transacción propia.
+> ✅ **Validado empíricamente en la Fase 2 (2026-08-13)** contra la base real:
+> - `FOR UPDATE OF p SKIP LOCKED` **funciona dentro del CTE** pese al `CROSS JOIN` sobre `VALUES` y a
+>   la subconsulta agregada. La restricción de Postgres sobre agregados aplica al **nivel superior**
+>   de la consulta, no a subconsultas escalares. El `OF p` es imprescindible: acota el bloqueo a
+>   filas de `Pliego` y evita el error de intentar bloquear el `VALUES`.
+> - Neon HTTP ejecuta cada sentencia como transacción propia: **2 reservas en paralelo** del último
+>   tramo → exactamente 1 gana, la disponibilidad nunca queda negativa.
+> - La expiración por demanda funciona: una reserva envejecida a 20 min deja de ocupar sin que nadie
+>   la toque (2100 → 100 → 2100).
 
 ### 5.5 El punto exacto del flujo donde se reserva
 
@@ -581,6 +608,57 @@ Y que el `CHECK` muerda: un `UPDATE` a −1 debe fallar con
 **Dependencias:** Fase 1 (tablas + semilla).
 
 **De Jonas:** abrir `/app/pliegos/debug`, recorrer los casos, pasar logs de Vercel si algo no cuadra.
+
+---
+
+#### ✅ Entregado el 2026-08-13
+
+Archivos: `app/lib/pliegos.server.ts` (nuevo) · `app/routes/app.pliegos.debug.tsx` (nuevo, temporal).
+
+**Funciones exportadas:** `capacidades()` · `factible()` · `reservar()` · `anular()` ·
+`eliminarReservas()` · `vincularDraftOrder()` · `confirmarPorDraftOrder()` · `reconciliar()` ·
+`estadoPliegos()`. Las 4 últimas se dejan listas porque `reconciliar()` comparte el cuerpo de la
+confirmación; **nadie las llama todavía** — se cablean en la Fase 4.
+
+**Decisiones tomadas durante la implementación:**
+
+1. **El filtro de largo se movió dentro del CTE.** Bug real del §5.4 original, reproducido y
+   corregido. Ver el recuadro rojo del §5.4.
+2. **`p.codigo ASC` añadido como 4º criterio de desempate**, antes de `id ASC`. Con UUIDs, el rollo
+   elegido entre varios idénticos era impredecible y el QA no podía verificar "eligió CEN-100-01".
+3. **`capacidades()` descuenta reservas vigentes**, no usa `largoRestanteCm` a secas como sugería el
+   §Fase 5. Si usara el valor confirmado, el widget podría decir "cabe" y el checkout responder
+   "sin stock" para la misma medida. Debe ser la **misma fórmula** que el selector.
+4. **`capacidades()` devuelve capacidad FÍSICA pura**, sin aplicar el tope comercial de la regla.
+   El híbrido `min(comercial, físico)` del §2.4 se resuelve en `/api/precio` (Fase 5). Así el motor
+   queda verificable aunque una regla tenga topes mal configurados — que es justo el caso de
+   `Alfombra test 2` (`maxAncho`/`maxAlto` = 21). **No se tocó la configuración del producto**; la
+   ruta debug muestra un aviso cuando detecta topes < 50 cm.
+5. **`reservar()` es todo-o-nada**: si un item del lote no cabe, anula las reservas ya hechas en esa
+   misma llamada antes de devolver `SIN_STOCK`. Es el paso 2 del §5.5 encapsulado.
+6. **Idempotencia explícita**: ante `ON CONFLICT DO NOTHING` con 0 filas, el módulo consulta si el
+   `refId` ya tenía reserva y devuelve la existente con `yaExistia: true`, en vez de un falso
+   "sin stock" ante un doble clic o un retry de red.
+
+**Validación ejecutada (toda contra la base real, sin dejar rastro):**
+
+| Caso | Resultado |
+|---|---|
+| `FOR UPDATE OF p` dentro del CTE | ✅ ejecuta |
+| 100×300 | ✅ CEN-100-01 · no rotada · consume 300 · merma 0 |
+| 350×400 | ✅ CEN-400-01 · **ROTADA** · consume 350 · merma 0 |
+| 250×350 | ✅ CEN-300-01 · no rotada · consume 350 · merma 50 |
+| 350×2100 | ✅ SIN_STOCK |
+| Mismo `refId` ×2 | ✅ 1 sola reserva, la 2ª devuelve la existente |
+| Expiración 15 min | ✅ 2100 → 100 (ocupa) → 2100 (vencida, libera sola) |
+| 2 reservas en paralelo del último tramo | ✅ 1 gana, disponibilidad nunca < 0 |
+| 4 pedidos 90×2000 | ✅ los 4 rollos de 1 m, uno cada uno |
+| Mejor-ancho agotado → siguiente candidato | ✅ cae a CEN-400 en vez de SIN_STOCK |
+| `reservar()` todo-o-nada + compensación | ✅ anula la previa al fallar el 2º item |
+| `confirmarPorDraftOrder()` baja el stock | ✅ −700 cm exactos |
+| Confirmar 2 veces | ✅ idempotente, no descuenta doble |
+| `reconciliar()` vencida huérfana | ✅ anulada |
+| Estado final de la DB | ✅ 11 pliegos / 23110 cm / 0 reservas |
 
 ---
 
@@ -818,10 +896,11 @@ registrado en `MovimientoPliego` con nota obligatoria. Es **corregible, no autom
 
 | | |
 |---|---|
-| **Fase actual** | ✅ **Fase 1 COMPLETADA** (2026-08-13). Migración aplicada en Neon, 11 pliegos sembrados, validaciones aprobadas. |
+| **Fase actual** | ✅ **Fases 1 y 2 COMPLETADAS** (2026-08-13). Motor implementado y validado contra la base real; ruta de diagnóstico desplegada. |
 | **Bloqueantes** | Ninguno. |
 | **Datos en producción** | 11 pliegos · 23110 cm · colgados de `Alfombra test 2` (`cmoipz5lp0000l704zvl3nx6h`) · 11 `MovimientoPliego` motivo `alta` · 0 reservas |
-| **Siguiente entregable** | **Fase 2** (no arrancada): `app/lib/pliegos.server.ts` con `capacidades()` / `reservar()` / `reconciliar()` + ruta de diagnóstico `/app/pliegos/debug`. La matriz de prueba del §FASE 2 ya se puede correr tal cual contra estos 11 pliegos. |
+| **Pendiente de QA** | Que Jonas recorra `/app/pliegos/debug` y confirme la matriz. El motor **no está cableado a ningún checkout**: cero impacto en ventas hasta la Fase 4. |
+| **Siguiente entregable** | **Fase 3** (no arrancada): admin `/app/pliegos` + `/app/pliegos/$reglaId` con alta masiva, ajustes y las pestañas Reservas y Cortes. |
 
 ### Historial
 
@@ -834,7 +913,7 @@ registrado en `MovimientoPliego` con nota obligatoria. Es **corregible, no autom
 | 2026-08-13 | **1** | Código completo — schema + migración + semilla + validación | Migración verificada contra `prisma migrate diff` (coincide exacta). Corregido el total de §1.5: 231.10 m, no 232.90 m. |
 | 2026-08-13 | — | **Supuesto corregido: Ceniza no existe** | Verificado en Neon + Shopify. Decisión del cliente: el MVP corre sobre `Alfombra test 2`. Ceniza queda como paso futuro. Ver aviso de la cabecera. |
 | 2026-08-13 | **1** | ✅ **FASE 1 COMPLETADA** — migración aplicada, 11 pliegos sembrados, validaciones aprobadas | `migrate deploy` OK · 11 pliegos / 23110 cm / 231.10 m sobre `Alfombra test 2` · 11 movimientos `alta` · CHECK y las 3 FK `RESTRICT` verificadas mordiendo. Añadidas las FK de `ReservaPliego.pliegoId` y `MovimientoPliego.pliegoId` (no estaban en el §4.1 original). |
-| | **2** | ⬜ Pendiente | |
+| 2026-08-13 | **2** | ✅ **FASE 2 COMPLETADA** — motor `app/lib/pliegos.server.ts` + ruta `/app/pliegos/debug` | Sentencia atómica validada contra la base real (matriz §5.3, idempotencia, expiración, concurrencia, reparto de rollos). **Bug encontrado y corregido en el §5.4**: el filtro de largo estaba después del `LIMIT 1` y devolvía SIN_STOCK teniendo stock. `FOR UPDATE OF p` confirmado dentro del CTE. Sin cablear a checkout → cero impacto en ventas. |
 | | **3** | ⬜ Pendiente | |
 | | **4** | ⬜ Pendiente | |
 | | **5** | ⬜ Pendiente | |
