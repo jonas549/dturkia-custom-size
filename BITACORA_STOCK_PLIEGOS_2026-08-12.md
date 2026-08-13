@@ -28,6 +28,9 @@
 > Documento de referencia consultable entre sesiones. Se actualiza al cerrar cada fase
 > (ver [§8 Registro de avance](#8-registro-de-avance)).
 
+> 📓 **Bitácoras de sesión** (qué se hizo cada día, con el estado para retomar):
+> `BITACORA_SESION_2026-08-13.md`.
+
 ---
 
 ## Índice
