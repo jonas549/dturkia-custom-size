@@ -2,7 +2,7 @@
 
 **Proyecto:** dturkia-custom-size (D'Turkia · `dturkia.myshopify.com`)
 **Iniciada:** 2026-08-12
-**Estado:** ✅ **Fases 1-4 COMPLETADAS** — checkout integrado en modo observación. Falta que Jonas cree `PLIEGOS_MODO=log` en Vercel
+**Estado:** ✅ **Fases 1-7 COMPLETADAS** — falta pegar los 2 archivos del tema y activar `PLIEGOS_MODO`. Siguiente: Fase 8 (activación + QA)
 **Última actualización:** 2026-08-13
 
 > ### ⚠️ LEER ANTES DE TOCAR NADA — sobre "Ceniza"
@@ -1031,6 +1031,36 @@ y ver el mensaje correcto bajo el botón Comprar.
 
 ---
 
+#### ✅ Entregado el 2026-08-13
+
+Archivo: `tema-dturkia/assets/functions.js`.
+Copia versionada en `dturkia-custom-size/tema-entregas/functions.js`.
+
+**Changelog por bloque — solo 2 zonas tocadas, ambas dentro del handler
+`$('body').on('click', '#minicart .csw-comprar', …)`:**
+
+| # | Dónde | Qué cambió |
+|---|---|---|
+| 1 | `var customItems = arr.map(…)` (~línea 740) | Añadidos `id: item.id \|\| null` y `reglaId: item.reglaId \|\| null` al principio del objeto |
+| 2 | `error:` del `$.ajax` (~línea 800) | Lee `jqXHR.responseJSON.error` (con fallback a parsear `responseText`) y lo muestra; si no hay mensaje del servidor, cae al genérico de siempre |
+
+**Contrato verificado** contra los dos endpoints: ambos leen `refId: item.id` y
+`reglaId: item.reglaId`. Los nombres coinciden.
+
+> **La idempotencia se arregla del todo con esta fase, incluso para los items viejos.** El snippet
+> **siempre** ha guardado un `id` en cada item de `csw_pending_orders`; lo que faltaba era que
+> `functions.js` lo enviara. En cuanto se pegue este archivo, todos los items del localStorage —
+> nuevos y antiguos — viajan con su `id`, y el `refId @unique` de `ReservaPliego` empieza a proteger
+> contra el doble clic. Esto **levanta la advertencia de la Fase 4** de no pasar a `MODO=bloqueo`
+> antes de la Fase 7.
+>
+> `reglaId` sí falta en los items antiguos, pero eso lo cubre el backend resolviendo la trama desde
+> `variantId`.
+
+**Validación:** `node --check assets/functions.js` OK.
+
+---
+
 ### FASE 8 — Activación y QA end-to-end
 
 **Qué se hace:** `PLIEGOS_MODO=bloqueo`; eliminar `/app/pliegos/debug`; cargar el inventario real de
@@ -1112,12 +1142,13 @@ registrado en `MovimientoPliego` con nota obligatoria. Es **corregible, no autom
 
 | | |
 |---|---|
-| **Fase actual** | ✅ **Fases 1-4 COMPLETADAS** (2026-08-13). Checkout integrado en los dos endpoints, desactivado por bandera. |
+| **Fase actual** | ✅ **Fases 1-7 COMPLETADAS** (2026-08-13). Todo el código está en producción; falta activarlo. |
 | **Bloqueantes** | Ninguno. |
-| **Acción pendiente de Jonas** | **Crear `PLIEGOS_MODO=log` en Vercel** (Settings → Environment Variables → Production) y redeploy. Sin esa variable el modo es `off` y el control de stock no hace nada — el comportamiento es idéntico al de antes. |
-| **Datos en producción** | 11 pliegos · 23110 cm · colgados de `Alfombra test 2` (`cmoipz5lp0000l704zvl3nx6h`) · 11 `MovimientoPliego` motivo `alta` · 0 reservas |
-| **Pendiente de QA** | Compras de prueba en `MODO=log`: una pagada, una abandonada, y una con carrito mixto. Revisar los logs `[PLIEGOS]` en Vercel y la pestaña Cortes. |
-| **Siguiente entregable** | **Fase 5** (no arrancada): `/api/precio` devuelve `reglaId` + `capacidades` + topes acotados con `min(comercial, físico)`. Es aditiva y no puede romper el snippet actual. **Ojo:** ahí es donde el `maxAncho/maxAlto = 21` de `Alfombra test 2` empezará a importar. |
+| **Acción pendiente de Jonas (2 cosas)** | **(a)** Pegar en el editor de temas de Shopify: `snippets/custom-size-snippet.liquid` y `assets/functions.js` (copias en `tema-entregas/`). **(b)** Crear `PLIEGOS_MODO=log` en Vercel → Settings → Environment Variables → Production, y redeploy. |
+| **Estado si no se hace nada** | Con `PLIEGOS_MODO` sin definir el modo es `off`: el control de stock no hace absolutamente nada y la tienda se comporta igual que antes. Nada está activo por accidente. |
+| **Datos en producción** | 11 pliegos · 23110 cm · colgados de `Alfombra test 2` (`cmoipz5lp0000l704zvl3nx6h`, topes 400×2100 cm) · 11 `MovimientoPliego` motivo `alta` · 0 reservas |
+| **Pendiente de QA** | En `MODO=log`: slider bloqueando `350×2100`, compra pagada, compra abandonada, y carrito mixto. Logs `[PLIEGOS]` en Vercel + pestañas Reservas y Cortes. |
+| **Siguiente entregable** | **Fase 8** (no arrancada, se hace con Jonas): `PLIEGOS_MODO=bloqueo`, eliminar `/app/pliegos/debug`, y la matriz de QA end-to-end del plan. |
 
 ### Historial
 
@@ -1137,7 +1168,7 @@ registrado en `MovimientoPliego` con nota obligatoria. Es **corregible, no autom
 | 2026-08-13 | **4** | ✅ **FASE 4 COMPLETADA** — reserva integrada en los DOS endpoints de checkout, modo observación | `PLIEGOS_MODO=off\|log\|bloqueo` con default `off`. Confirmación en `/api/check-paid`. Corregido el bug del `borde` en `api.checkout-impermeabilizador.tsx`. **Añadido al plan:** resolución de trama desde `variantId`, porque el tema aún no manda `reglaId` (Fase 6) y sin eso la fase no se podía validar. **Guarda de seguridad:** una trama sin pliegos nunca bloquea. Los 3 modos validados contra la base real. |
 | 2026-08-13 | **5** | ✅ **FASE 5 COMPLETADA** — `/api/precio` devuelve `reglaId` + `capacidades` + topes híbridos | Aditivo y envuelto en try/catch: el stock nunca tumba el precio. **Corregidos los topes de `Alfombra test 2`**: el campo es cm y estaba en 21 (metros tecleados en campo de cm) → 400 × 2100. Sin tocar fórmulas; precios verificados idénticos. |
 | 2026-08-13 | **6** | ✅ **FASE 6 COMPLETADA** — `custom-size-snippet.liquid`: guarda `reglaId`, valida el par con rotación, estado Agotado | Entregado para copiar/pegar; copia versionada en `tema-entregas/`. Compat: si `capacidades` no viene, comportamiento actual intacto. Sin tocar `calcular()`. **Pendiente: que Jonas lo pegue en el editor de temas.** |
-| | **7** | ⬜ Pendiente | |
+| 2026-08-13 | **7** | ✅ **FASE 7 COMPLETADA** — `functions.js`: envía `id` + `reglaId`, muestra el error real de stock | Solo 2 zonas tocadas. Copia versionada en `tema-entregas/`. La idempotencia queda arreglada incluso para items viejos (el snippet siempre guardó `id`; faltaba enviarlo) → levanta la advertencia de la Fase 4. **Pendiente: que Jonas lo pegue en el editor de temas.** |
 | | **8** | ⬜ Pendiente | |
 
 ### Cómo actualizar esta bitácora
