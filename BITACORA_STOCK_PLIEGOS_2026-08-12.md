@@ -877,6 +877,57 @@ Un pliego dado de baja debe desaparecer del arreglo.
 
 ---
 
+#### ✅ Entregado el 2026-08-13
+
+Archivo: `app/routes/api.precio.tsx`.
+
+**Tres estados distintos en la respuesta, y la diferencia importa:**
+
+| Estado | Respuesta | Efecto en el widget |
+|---|---|---|
+| La trama no tiene pliegos | `capacidades` **ausente** | Comportamiento actual intacto, sin control de stock |
+| Tiene pliegos, sin material | `capacidades: []` | **Agotado** |
+| Tiene material | `capacidades: [...]` | Valida el par (§2.3) |
+
+Todo va envuelto en `try/catch`: si el cálculo de stock falla por lo que sea, se omite `capacidades` y
+el widget sigue funcionando exactamente como antes. **El stock nunca puede tumbar el precio.**
+
+**Tope híbrido (§2.4)** — `min(tope comercial, tope físico)`. El tope físico se calcula **con
+rotación**: una pieza de lado X cabe si algún rollo tiene ese ancho **o** si su largo lo permite
+cortándola girada, así que el tope es `max(anchoCm, largoMaxCm)` sobre todas las capacidades. Con el
+inventario actual da 2170 cm. Si la trama está agotada **no** se acotan los topes a 0: eso dejaría el
+slider inservible; el "Agotado" lo comunica el arreglo vacío.
+
+---
+
+### 🔧 `Alfombra test 2` — topes comerciales corregidos (2026-08-13)
+
+**El campo `maxAncho`/`maxAlto` está en CENTÍMETROS.** Verificado por dos vías independientes:
+- El formulario del admin etiqueta los campos como *"Ancho máximo (cm)"* (`app.reglas.nueva.tsx`).
+- El snippet los imprime literalmente como `regla.maxAncho + ' cm'` y los usa como `min`/`max` de los
+  sliders (`custom-size-snippet.liquid:813-821`).
+
+La regla tenía `maxAncho = 21` y `maxAlto = 21`, es decir **21 centímetros**: alguien tecleó metros
+en un campo de centímetros. Con el híbrido de esta fase, eso habría dejado el widget ofreciendo
+alfombras de hasta 21 × 21 cm y **ningún pedido habría llegado nunca al motor de pliegos**.
+
+**Corregido a `maxAncho = 400`, `maxAlto = 2100`** (solo esos dos campos, con `UPDATE` directo):
+- **400 cm** es el ancho del rollo más ancho del inventario de prueba.
+- **2100 cm** deja el slider manejable y, sobre todo, permite configurar `350 × 2100`, que es
+  **físicamente imposible** con este inventario y por tanto demuestra en vivo el hallazgo del §2.3:
+  ambas dimensiones caben por separado pero el **par** no.
+
+Es dato del producto de prueba, no una fórmula. **No se tocó `precioPorM2` ni ninguna fórmula**;
+verificado que los precios no cambian: 250×350 → 840.000, 100×100 → 70.000, 230×230 → 630.000.
+`minAncho`/`minAlto` se dejaron en 1 (no bloquean nada y `precio_desde` no varía, porque tanto 1 cm
+como 50 cm redondean al mismo m²).
+
+**Validación ejecutada** contra el loader real: `reglaId` y `capacidades` presentes, topes híbridos
+400/2100, `factible()` correcto en los 5 casos clave (incluido `350×2100` → falso), precios
+inalterados, y la trama sin pliegos omite `capacidades` conservando sus topes 500×500.
+
+---
+
 ### FASE 6 🔶 — Tema: `custom-size-snippet.liquid`
 
 Primera fase que toca el tema. Se entrega el **archivo completo listo para copiar/pegar** + changelog
@@ -1037,7 +1088,7 @@ registrado en `MovimientoPliego` con nota obligatoria. Es **corregible, no autom
 | 2026-08-13 | **3** | ✅ **FASE 3 COMPLETADA** — admin `/app/pliegos` + `/app/pliegos/$reglaId` + nav | Alta masiva con código correlativo, ajuste con nota obligatoria, baja/reactivación (nunca DELETE), pestañas Reservas · Cortes · Movimientos, y reconciliación por demanda al abrir el índice. Validado contra la base real y revertido. Sigue sin tocar el flujo de compra. |
 | 2026-08-13 | **3** | ✅ QA de Fase 3 aprobado por Jonas | La pantalla carga y muestra los 11 rollos correctamente. |
 | 2026-08-13 | **4** | ✅ **FASE 4 COMPLETADA** — reserva integrada en los DOS endpoints de checkout, modo observación | `PLIEGOS_MODO=off\|log\|bloqueo` con default `off`. Confirmación en `/api/check-paid`. Corregido el bug del `borde` en `api.checkout-impermeabilizador.tsx`. **Añadido al plan:** resolución de trama desde `variantId`, porque el tema aún no manda `reglaId` (Fase 6) y sin eso la fase no se podía validar. **Guarda de seguridad:** una trama sin pliegos nunca bloquea. Los 3 modos validados contra la base real. |
-| | **5** | ⬜ Pendiente | |
+| 2026-08-13 | **5** | ✅ **FASE 5 COMPLETADA** — `/api/precio` devuelve `reglaId` + `capacidades` + topes híbridos | Aditivo y envuelto en try/catch: el stock nunca tumba el precio. **Corregidos los topes de `Alfombra test 2`**: el campo es cm y estaba en 21 (metros tecleados en campo de cm) → 400 × 2100. Sin tocar fórmulas; precios verificados idénticos. |
 | | **6** | ⬜ Pendiente | |
 | | **7** | ⬜ Pendiente | |
 | | **8** | ⬜ Pendiente | |

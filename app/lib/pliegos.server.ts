@@ -613,7 +613,7 @@ export async function estadoPliegos(shop: string, reglaId: string): Promise<Plie
 // ── Integración con el checkout (Fase 4) ────────────────────────────────────
 
 /** ¿Esta trama tiene pliegos cargados? Si no, el control de stock NO la afecta. */
-async function tienePliegos(shop: string, reglaId: string): Promise<boolean> {
+export async function tienePliegos(shop: string, reglaId: string): Promise<boolean> {
   const sql = db();
   const filas = await sql`
     SELECT 1 FROM "Pliego"

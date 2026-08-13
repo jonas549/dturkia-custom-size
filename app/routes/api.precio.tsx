@@ -1,5 +1,6 @@
 import type { LoaderFunctionArgs } from "react-router";
 import { neon } from "@neondatabase/serverless";
+import { capacidades, tienePliegos, type Capacidad } from "../lib/pliegos.server";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -100,6 +101,55 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   const precio = Math.round(m2 * regla.precioPorM2);
   const waterproofPrecio = Math.round(m2 * regla.waterproofPorM2);
 
+  // ── Stock por pliego (Fase 5) — aditivo ────────────────────────────────────
+  // El snippet antiguo ignora los campos que no conoce, así que esto no puede
+  // romper nada que ya esté en producción.
+  //
+  // Tres estados distintos, y la diferencia importa:
+  //   · `capacidades` ausente  → la trama NO tiene pliegos cargados. Sin control
+  //                              de stock: el widget se comporta como siempre.
+  //   · `capacidades: []`      → tiene pliegos pero no queda material. AGOTADO.
+  //   · `capacidades: [...]`   → hay material; el widget valida el PAR (§2.3).
+  let capacidadesResp: Capacidad[] | undefined;
+  let topes = {
+    minAncho: regla.minAncho,
+    maxAncho: regla.maxAncho,
+    minAlto: regla.minAlto,
+    maxAlto: regla.maxAlto,
+  };
+
+  try {
+    if (await tienePliegos(shop, regla.id)) {
+      capacidadesResp = await capacidades(shop, regla.id);
+
+      if (capacidadesResp.length) {
+        // Tope físico por dimensión, CON rotación (decisión 1): una pieza de
+        // lado X cabe si algún rollo tiene ese ancho, o si su largo lo permite
+        // cortándola girada. Por eso el tope es el mayor de ambos.
+        const topeFisico = capacidadesResp.reduce(
+          (mx, c) => Math.max(mx, c.anchoCm, c.largoMaxCm), 0,
+        );
+        // §2.4 — híbrido: el tope manual es un techo COMERCIAL y el físico solo
+        // puede restringirlo, nunca ampliarlo.
+        topes = {
+          minAncho: regla.minAncho,
+          maxAncho: Math.min(regla.maxAncho, topeFisico),
+          minAlto: regla.minAlto,
+          maxAlto: Math.min(regla.maxAlto, topeFisico),
+        };
+      }
+      // Si está agotado se dejan los topes comerciales tal cual: acotarlos a 0
+      // dejaría el slider inservible. El widget mostrará "Agotado" por el
+      // arreglo vacío, no por los topes.
+      console.log("[api.precio] capacidades:", JSON.stringify(capacidadesResp), "topes:", JSON.stringify(topes));
+    }
+  } catch (e) {
+    // El stock nunca debe tumbar el cálculo de precio: si algo falla, el
+    // widget sigue funcionando exactamente como antes de este módulo.
+    console.error("[api.precio] Error calculando capacidades (se ignora):", e);
+    capacidadesResp = undefined;
+  }
+
   return new Response(
     JSON.stringify({
       precio,
@@ -107,12 +157,9 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       waterproofActivo: regla.waterproofActivo,
       precioPorM2: regla.precioPorM2,
       waterproofPorM2: regla.waterproofPorM2,
-      regla: {
-        minAncho: regla.minAncho,
-        maxAncho: regla.maxAncho,
-        minAlto: regla.minAlto,
-        maxAlto: regla.maxAlto,
-      },
+      regla: topes,
+      reglaId: regla.id,
+      ...(capacidadesResp !== undefined ? { capacidades: capacidadesResp } : {}),
       bordes,
       textosImp,
     }),
