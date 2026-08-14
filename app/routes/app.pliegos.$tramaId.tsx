@@ -2,10 +2,13 @@
  * Admin de stock por pliego — gestión de una trama. Fase 3.
  * Ver BITACORA_STOCK_PLIEGOS_2026-08-12.md — FASE 3.
  *
- * Pestañas: Pliegos (alta masiva, ajuste, baja) · Reservas · Cortes.
+ * Pestañas: Pliegos (alta masiva, ajuste, baja, restaurar) · Reservas · Cortes.
  * La pestaña Cortes es LA PANTALLA DEL TALLER exigida por la decisión 5: como
  * el código de pliego no viaja en la orden de Shopify, éste es el único sitio
  * donde se cruza orden ↔ pliego.
+ *
+ * 🔷 §4.4 — la unidad de esta pantalla es la TRAMA, no la regla: el parámetro de
+ * ruta pasó de `$reglaId` a `$tramaId` y todas las consultas filtran por trama.
  */
 
 import { Fragment, useState } from "react";
@@ -13,7 +16,6 @@ import type { ActionFunctionArgs, HeadersFunction, LoaderFunctionArgs } from "re
 import { Form, Link, useActionData, useLoaderData, useNavigation, useSearchParams } from "react-router";
 import { boundary } from "@shopify/shopify-app-react-router/server";
 import { authenticate } from "../shopify.server";
-import prisma from "../db.server";
 import {
   ajustarPliego,
   altaMasiva,
@@ -25,37 +27,38 @@ import {
   movimientosDeTrama,
   prefijoSugerido,
   reservasDeTrama,
+  restaurarPliego,
+  tramaPorId,
   RESERVA_TTL_MIN,
 } from "../lib/pliegos.server";
 
 export const loader = async ({ request, params }: LoaderFunctionArgs) => {
   const { session } = await authenticate.admin(request);
   const shop = session.shop;
-  const reglaId = params.reglaId!;
+  const tramaId = params.tramaId!;
 
-  const regla = await prisma.reglaPersonalizada.findFirst({
-    where: { id: reglaId, shop },
-    select: { id: true, nombre: true, activa: true, productIds: true, maxAncho: true, maxAlto: true },
-  });
-  if (!regla) throw new Response("Trama no encontrada", { status: 404 });
+  const trama = await tramaPorId(shop, tramaId);
+  if (!trama) throw new Response("Trama no encontrada", { status: 404 });
 
   const [pliegos, caps, reservas, cortes, movimientos] = await Promise.all([
-    estadoPliegos(shop, reglaId),
-    capacidades(shop, reglaId),
-    reservasDeTrama(shop, reglaId),
-    cortesDeTrama(shop, reglaId),
-    movimientosDeTrama(shop, reglaId),
+    estadoPliegos(shop, tramaId),
+    capacidades(shop, tramaId),
+    reservasDeTrama(shop, tramaId),
+    cortesDeTrama(shop, tramaId),
+    movimientosDeTrama(shop, tramaId),
   ]);
 
   return {
-    regla,
+    trama,
     pliegos,
     // `escalones()` vive en un módulo .server: se arma aquí, no en el render.
     escalonesLista: escalones(caps),
     reservas,
     cortes,
     movimientos,
-    prefijo: prefijoSugerido(regla.nombre),
+    // El prefijo se sugiere desde el nombre de la TRAMA, no el de la regla:
+    // "Ceniza" → CEN, que es justo lo que llevan los códigos existentes.
+    prefijo: prefijoSugerido(trama.nombre),
     ttl: RESERVA_TTL_MIN,
   };
 };
@@ -63,7 +66,7 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
 export const action = async ({ request, params }: ActionFunctionArgs) => {
   const { session } = await authenticate.admin(request);
   const shop = session.shop;
-  const reglaId = params.reglaId!;
+  const tramaId = params.tramaId!;
   const fd = await request.formData();
   const intent = String(fd.get("intent") ?? "");
 
@@ -88,7 +91,7 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
     const anchoCm = Math.round(anchoM * 100);
     const largoCm = Math.round(largoM * 100);
 
-    const r = await altaMasiva(shop, reglaId, { prefijo, anchoCm, largoCm, cantidad, nota });
+    const r = await altaMasiva(shop, tramaId, { prefijo, anchoCm, largoCm, cantidad, nota });
     if (!r.creados.length) {
       return { error: "No se creó ningún pliego. ¿Los códigos ya existían?" };
     }
@@ -113,6 +116,23 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
     if (!r.ok) return { error: r.error };
     return {
       mensaje: `${r.codigo} ajustado: ${r.delta >= 0 ? "+" : ""}${(r.delta / 100).toFixed(2)} m. Movimiento registrado.`,
+    };
+  }
+
+  // Restaurar: devuelve el rollo a 0% consumido. Es para resetear el stock
+  // después del QA sin dar de baja el rollo y volver a darlo de alta (lo que
+  // cambiaría su código y rompería la trazabilidad de los cortes existentes).
+  if (intent === "restaurar") {
+    const pliegoId = String(fd.get("pliegoId") ?? "");
+    const nota = String(fd.get("nota") ?? "").trim();
+    if (!nota) return { error: "La nota es obligatoria para restaurar un rollo." };
+
+    const r = await restaurarPliego(shop, pliegoId, nota);
+    if (!r.ok) return { error: r.error };
+    return {
+      mensaje:
+        `${r.codigo} restaurado al 100%: se recuperaron ${(r.delta / 100).toFixed(2)} m ` +
+        `(${(r.largoTotalCm / 100).toFixed(2)} m de largo total). Movimiento registrado.`,
     };
   }
 
@@ -173,7 +193,7 @@ const fecha = (iso: string) =>
   new Date(iso).toLocaleString("es-CL", { day: "2-digit", month: "2-digit", year: "2-digit", hour: "2-digit", minute: "2-digit" });
 
 export default function GestionTrama() {
-  const { regla, pliegos, escalonesLista, reservas, cortes, movimientos, prefijo, ttl } =
+  const { trama, pliegos, escalonesLista, reservas, cortes, movimientos, prefijo, ttl } =
     useLoaderData<typeof loader>();
   const data = useActionData<typeof action>();
   const nav = useNavigation();
@@ -183,37 +203,50 @@ export default function GestionTrama() {
 
   const [ajustando, setAjustando] = useState<string | null>(null);
   const [dandoBaja, setDandoBaja] = useState<string | null>(null);
+  const [restaurando, setRestaurando] = useState<string | null>(null);
 
   const activos = pliegos.filter((p) => p.activo);
   const disponibleTotal = activos.reduce((a, p) => a + Math.max(0, p.disponibleCm), 0);
   const vigentes = reservas.filter((r) => r.estado === "pendiente" && !r.vencida);
   const vencidas = reservas.filter((r) => r.estado === "pendiente" && r.vencida);
-  const topesSospechosos = regla.maxAncho < 50 || regla.maxAlto < 50;
+  const topesSospechosos = trama.maxAncho < 50 || trama.maxAlto < 50;
 
   const irA = (t: string) => setParams(t === "pliegos" ? {} : { tab: t });
 
   return (
-    <s-page heading={`Stock de pliegos — ${regla.nombre}`}>
+    <s-page heading={`Stock de pliegos — ${trama.nombre}`}>
       <s-section>
         <p style={{ fontSize: 13, color: "#6d7175", margin: "0 0 12px" }}>
           <Link to="/app/pliegos" style={{ color: "#0070c4" }}>← Todas las tramas</Link>
           {"  ·  "}
+          Trama de <strong>{trama.reglaNombre}</strong>
+          {"  ·  "}
           {activos.length} rollo(s) activo(s) · {m(disponibleTotal)} disponible
           {"  ·  "}
-          <Link to={`/app/pliegos/debug?reglaId=${regla.id}`} style={{ color: "#0070c4" }}>
+          <Link to={`/app/pliegos/debug?tramaId=${trama.id}`} style={{ color: "#0070c4" }}>
             Probar el motor con esta trama
           </Link>
         </p>
+
+        {!trama.activa && (
+          <div style={{
+            background: "#fde8e8", border: "1px solid #f6b0b0", color: "#8f1c1c",
+            borderRadius: 6, padding: "10px 14px", fontSize: 13, marginBottom: 16,
+          }}>
+            Esta trama está <strong>dada de baja</strong>: no aparece en la tienda y no se puede
+            comprar. Su stock se conserva intacto. Se reactiva desde el formulario de la regla.
+          </div>
+        )}
 
         {topesSospechosos && (
           <div style={{
             background: "#fff8e1", border: "1px solid #ffd79a", color: "#7a4f01",
             borderRadius: 6, padding: "10px 14px", fontSize: 13, marginBottom: 16,
           }}>
-            <strong>Aviso:</strong> esta regla tiene <code>maxAncho={regla.maxAncho}</code> y{" "}
-            <code>maxAlto={regla.maxAlto}</code>, que en centímetros son {m(regla.maxAncho)} ×{" "}
-            {m(regla.maxAlto)}. El control de stock <strong>no usa esos topes</strong>, pero el widget
-            de la tienda sí los aplicará cuando se conecte (Fase 5). No se ha modificado nada.
+            <strong>Aviso:</strong> la regla <strong>{trama.reglaNombre}</strong> tiene{" "}
+            <code>maxAncho={trama.maxAncho}</code> y <code>maxAlto={trama.maxAlto}</code>, que en
+            centímetros son {m(trama.maxAncho)} × {m(trama.maxAlto)}. El control de stock{" "}
+            <strong>no usa esos topes</strong>, pero el widget de la tienda sí los aplica.
           </div>
         )}
 
@@ -332,11 +365,18 @@ export default function GestionTrama() {
                               </td>
                               <td style={{ ...td, whiteSpace: "nowrap" }}>
                                 <button type="button" style={btnGhost}
-                                  onClick={() => { setAjustando(ajustando === p.id ? null : p.id); setDandoBaja(null); }}>
+                                  onClick={() => { setAjustando(ajustando === p.id ? null : p.id); setDandoBaja(null); setRestaurando(null); }}>
                                   Ajustar
                                 </button>{" "}
+                                <button type="button"
+                                  style={{ ...btnGhost, color: "#0b5c2e", borderColor: "#0b5c2e" }}
+                                  disabled={p.largoRestanteCm >= p.largoTotalCm}
+                                  title={p.largoRestanteCm >= p.largoTotalCm ? "Ya está al 100%" : "Devolver el rollo a 0% consumido"}
+                                  onClick={() => { setRestaurando(restaurando === p.id ? null : p.id); setAjustando(null); setDandoBaja(null); }}>
+                                  Restaurar
+                                </button>{" "}
                                 <button type="button" style={p.activo ? btnDanger : btnGhost}
-                                  onClick={() => { setDandoBaja(dandoBaja === p.id ? null : p.id); setAjustando(null); }}>
+                                  onClick={() => { setDandoBaja(dandoBaja === p.id ? null : p.id); setAjustando(null); setRestaurando(null); }}>
                                   {p.activo ? "Dar de baja" : "Reactivar"}
                                 </button>
                               </td>
@@ -369,6 +409,43 @@ export default function GestionTrama() {
                                         <input name="nota" placeholder="Ej: corte de 3 m vendido en el local" style={input} required />
                                       </div>
                                       <button type="submit" style={btn} disabled={guardando}>Guardar ajuste</button>
+                                    </div>
+                                  </Form>
+                                </td>
+                              </tr>
+                            )}
+
+                            {restaurando === p.id && (
+                              <tr>
+                                <td style={{ ...td, background: "#f4fbf6" }} colSpan={8}>
+                                  <Form method="post" onSubmit={() => setRestaurando(null)}>
+                                    <input type="hidden" name="intent" value="restaurar" />
+                                    <input type="hidden" name="pliegoId" value={p.id} />
+                                    <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 8 }}>
+                                      Restaurar {p.codigo} al 100%
+                                    </div>
+                                    <p style={{ fontSize: 12, color: "#6d7175", margin: "0 0 10px" }}>
+                                      Devuelve el rollo a <strong>0% consumido</strong>:{" "}
+                                      {m(p.largoRestanteCm)} → <strong>{m(p.largoTotalCm)}</strong>{" "}
+                                      (se recuperan {m(p.largoTotalCm - p.largoRestanteCm)}). Es para
+                                      resetear el stock después de una tanda de pruebas.
+                                      {p.reservasVigentes > 0 && (
+                                        <>
+                                          {" "}<strong style={{ color: "#7a4f01" }}>
+                                            Ojo: este rollo tiene {p.reservasVigentes} reserva(s) vigente(s)
+                                          </strong>, que seguirán ocupando su largo hasta que venzan
+                                          ({ttl} min). Restaurar no anula reservas.
+                                        </>
+                                      )}
+                                    </p>
+                                    <div style={{ display: "grid", gridTemplateColumns: "1fr auto", gap: 10, alignItems: "end" }}>
+                                      <div>
+                                        <label style={label}>Motivo (obligatorio)</label>
+                                        <input name="nota" placeholder="Ej: reset de stock tras QA" style={input} required />
+                                      </div>
+                                      <button type="submit" style={btn} disabled={guardando}>
+                                        Confirmar restauración
+                                      </button>
                                     </div>
                                   </Form>
                                 </td>

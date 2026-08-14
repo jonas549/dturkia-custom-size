@@ -5,6 +5,11 @@
  * Resumen por trama + reconciliación por demanda al abrir (self-healing sin
  * cron, §3.2.3): si el merchant entra a mirar el stock, de paso se resuelven
  * las reservas vencidas contra Shopify.
+ *
+ * 🔷 §4.4 — la unidad de esta pantalla pasó de la REGLA a la TRAMA: cada trama
+ * tiene su propio inventario y su propia escalera de escalones. La regla queda
+ * como subtítulo. La reconciliación sigue siendo por regla, así que se hace una
+ * vez por regla distinta, no una por trama.
  */
 
 import type { HeadersFunction, LoaderFunctionArgs } from "react-router";
@@ -17,6 +22,7 @@ import {
   escalones,
   estadoPliegos,
   reconciliar,
+  todasLasTramas,
   RESERVA_TTL_MIN,
   type Capacidad,
   type Escalon,
@@ -36,36 +42,45 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   const { session } = await authenticate.admin(request);
   const shop = session.shop;
 
-  const reglas = await prisma.reglaPersonalizada.findMany({
-    where: { shop },
-    select: { id: true, nombre: true, activa: true, productIds: true },
-    orderBy: { createdAt: "asc" },
-  });
+  const filas = await todasLasTramas(shop);
+
+  // Self-healing (§3.2.3): solo hace trabajo si hay reservas vencidas. Va por
+  // REGLA porque es donde vive `ReservaPliego.reglaId`; hacerlo por trama
+  // repetiría el trabajo entre tramas hermanas.
+  let reconciliadas = 0;
+  for (const reglaId of new Set(filas.map((t) => t.reglaId))) {
+    const rec = await reconciliar(shop, reglaId);
+    reconciliadas += rec.confirmadas + rec.anuladas;
+  }
+
+  // Reglas que todavía no tienen ninguna trama: sin tramas no puede haber
+  // stock, así que se avisa dónde crearlas.
+  const reglasSinTramas = (
+    await prisma.reglaPersonalizada.findMany({
+      where: { shop, id: { notIn: [...new Set(filas.map((t) => t.reglaId))] } },
+      select: { id: true, nombre: true },
+      orderBy: { createdAt: "asc" },
+    })
+  ).map((r) => ({ id: r.id, nombre: r.nombre }));
 
   const tramas = [];
-  let reconciliadas = 0;
 
-  for (const r of reglas) {
-    const pliegos = await estadoPliegos(shop, r.id);
+  for (const t of filas) {
+    const pliegos = await estadoPliegos(shop, t.id);
     if (!pliegos.length) {
       tramas.push({
-        ...r, sinPliegos: true, pliegos: [], caps: [] as Capacidad[],
+        ...t, sinPliegos: true, pliegos: [], caps: [] as Capacidad[],
         escalonesLista: [] as Escalon[], resumen: null,
       });
       continue;
     }
 
-    // Self-healing: solo hace trabajo si hay reservas vencidas sin resolver.
-    const rec = await reconciliar(shop, r.id);
-    reconciliadas += rec.confirmadas + rec.anuladas;
-
-    // Releer si la reconciliación cambió algo.
-    const finales = rec.confirmadas || rec.anuladas ? await estadoPliegos(shop, r.id) : pliegos;
-    const caps = await capacidades(shop, r.id);
+    const finales = pliegos;
+    const caps = await capacidades(shop, t.id);
     const activos = finales.filter((p) => p.activo);
 
     tramas.push({
-      ...r,
+      ...t,
       sinPliegos: false,
       pliegos: finales,
       caps,
@@ -90,7 +105,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     });
   }
 
-  return { tramas, reconciliadas, ttl: RESERVA_TTL_MIN };
+  return { tramas, reconciliadas, reglasSinTramas, ttl: RESERVA_TTL_MIN };
 };
 
 // ── Estilos ─────────────────────────────────────────────────────────────────
@@ -113,9 +128,10 @@ const chip = (bg: string, fg: string): React.CSSProperties => ({
 });
 
 const m = (cm: number) => `${(cm / 100).toFixed(2)} m`;
+const fmtCLP = (n: number) => new Intl.NumberFormat("es-CL").format(Math.round(n)) + " CLP";
 
 export default function PliegosIndex() {
-  const { tramas, reconciliadas, ttl } = useLoaderData<typeof loader>();
+  const { tramas, reconciliadas, reglasSinTramas, ttl } = useLoaderData<typeof loader>();
 
   const conPliegos = tramas.filter((t) => !t.sinPliegos);
   const sinPliegos = tramas.filter((t) => t.sinPliegos);
@@ -124,9 +140,10 @@ export default function PliegosIndex() {
     <s-page heading="Stock de pliegos">
       <s-section>
         <p style={{ fontSize: 13, color: "#6d7175", margin: "0 0 16px" }}>
-          Cada trama se corta de rollos físicos independientes. Una alfombra sale siempre de{" "}
-          <strong>un solo pliego</strong>: el ancho tiene que alcanzar y el largo se descuenta de ese
-          rollo. El sobrante de ancho es merma y no se reutiliza.
+          <strong>El stock es por trama.</strong> Cada trama de un producto tiene su propio
+          inventario de rollos físicos y su propio precio por m². Una alfombra sale siempre de{" "}
+          <strong>un solo pliego de la trama elegida</strong>: el ancho tiene que alcanzar y el largo
+          se descuenta de ese rollo. El sobrante de ancho es merma y no se reutiliza.
         </p>
 
         {reconciliadas > 0 && (
@@ -148,6 +165,18 @@ export default function PliegosIndex() {
           </div>
         )}
 
+        {reglasSinTramas.length > 0 && (
+          <div style={{
+            background: "#f1f8ff", border: "1px solid #b3d7f2", borderRadius: 6,
+            padding: "10px 14px", fontSize: 13, marginBottom: 16, color: "#0b4f79",
+          }}>
+            <strong>{reglasSinTramas.length} regla(s) sin tramas:</strong>{" "}
+            {reglasSinTramas.map((r) => r.nombre).join(", ")}. Sin tramas no puede haber stock, y el
+            widget se comporta como siempre (sin control). Las tramas se crean en{" "}
+            <strong>Reglas → editar → Tramas</strong>.
+          </div>
+        )}
+
         {conPliegos.map((t) => {
           const r = t.resumen!;
           const consumidoPct = r.totalCm > 0 ? 1 - r.disponibleCm / r.totalCm : 0;
@@ -155,9 +184,12 @@ export default function PliegosIndex() {
             <div key={t.id} style={card}>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "start", gap: 16, flexWrap: "wrap" }}>
                 <div>
-                  <h3 style={{ margin: "0 0 2px", fontSize: 16 }}>{t.nombre}</h3>
+                  <h3 style={{ margin: "0 0 2px", fontSize: 16 }}>
+                    {t.nombre}{!t.activa && <span style={{ ...chip("#fde8e8", "#8f1c1c"), marginLeft: 8 }}>DE BAJA</span>}
+                  </h3>
                   <p style={{ fontSize: 12, color: "#6d7175", margin: 0 }}>
-                    {t.activa ? "Regla activa" : "Regla INACTIVA"} · {t.productIds.length} producto(s)
+                    Trama de <strong>{t.reglaNombre}</strong>
+                    {!t.reglaActiva && " (regla INACTIVA)"} · {fmtCLP(t.precioPorM2)}/m²
                   </p>
                 </div>
                 <Link to={`/app/pliegos/${t.id}`}>
@@ -220,10 +252,11 @@ export default function PliegosIndex() {
                   ))
                 )}
                 <p style={{ fontSize: 12, color: "#6d7175", margin: "6px 0 0" }}>
-                  Un pedido solo puede cortarse de rollos de <strong>su</strong> escalón: si el
-                  escalón está sin material, la venta se bloquea aunque queden rollos más anchos.
-                  El límite real es el <strong>par</strong> (ancho, largo), y se evalúan las dos
-                  orientaciones — cada una contra el escalón del lado que va a lo ancho del rollo.
+                  Un pedido solo puede cortarse de rollos de <strong>su</strong> escalón, y el
+                  escalón lo fija el <strong>ancho pedido</strong>: si está sin material, la venta se
+                  bloquea aunque queden rollos más anchos. La rotación solo resuelve el largo{" "}
+                  <em>dentro</em> de ese escalón. Estos escalones son solo de esta trama: las demás
+                  tramas del producto tienen los suyos.
                 </p>
               </div>
 
@@ -266,7 +299,7 @@ export default function PliegosIndex() {
                 <div>
                   <div style={{ fontSize: 14, fontWeight: 600 }}>{t.nombre}</div>
                   <div style={{ fontSize: 12, color: "#6d7175" }}>
-                    {t.activa ? "Regla activa" : "Regla INACTIVA"} · {t.productIds.length} producto(s)
+                    Trama de <strong>{t.reglaNombre}</strong> · {fmtCLP(t.precioPorM2)}/m²
                   </div>
                 </div>
                 <Link to={`/app/pliegos/${t.id}`}>

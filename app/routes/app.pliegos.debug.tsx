@@ -22,6 +22,8 @@ import {
   evaluar,
   reconciliar,
   reservar,
+  todasLasTramas,
+  tramaPorId,
   RESERVA_TTL_MIN,
   type Capacidad,
   type Escalon,
@@ -32,8 +34,11 @@ const PREFIJO = "debug_";
 
 // La matriz del plan (§FASE 2 › Validación) que se puede correr de un clic.
 /**
- * ⚠️ Las expectativas dependen del inventario. Están calibradas para el estado
- * del 2026-08-14: 100→2100 · 300→70 (prácticamente seco) · 400→2010.
+ * ⚠️ Las expectativas dependen del inventario Y DE LA TRAMA seleccionada.
+ * Están calibradas para CENIZA en el estado del 2026-08-14:
+ * 100→2100 · 300→70 (prácticamente seco) · 400→2010. Corridas sobre otra trama
+ * (Alba, con anchos 80/300/378/380/382) los ✅/❌ no significan nada: mira la
+ * columna "escalón" para leer el porqué de cada veredicto.
  *
  * Los cuatro primeros casos son la REGRESIÓN de la corrección del 2026-08-14
  * (el escalón lo fija el ancho pedido). Antes de ella, 228×320 y 250×200 se
@@ -69,21 +74,35 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   const { session } = await authenticate.admin(request);
   const shop = session.shop;
 
-  const reglas = await prisma.reglaPersonalizada.findMany({
-    where: { shop },
-    select: { id: true, nombre: true, minAncho: true, maxAncho: true, minAlto: true, maxAlto: true },
-    orderBy: { createdAt: "asc" },
-  });
+  // 🔷 §4.4 — el selector pasa de listar reglas a listar TRAMAS: es la trama la
+  // que tiene inventario, y el motor se prueba contra una trama concreta. Los
+  // topes siguen siendo de la regla (son comerciales), así que se traen aparte.
+  const [tramasLista, topesPorRegla] = await Promise.all([
+    todasLasTramas(shop),
+    prisma.reglaPersonalizada.findMany({
+      where: { shop },
+      select: { id: true, minAncho: true, maxAncho: true, minAlto: true, maxAlto: true },
+    }),
+  ]);
+  const topes = new Map(topesPorRegla.map((r) => [r.id, r]));
+  const reglas = tramasLista.map((t) => ({
+    id: t.id,
+    nombre: `${t.nombre}  ·  ${t.reglaNombre}`,
+    minAncho: topes.get(t.reglaId)?.minAncho ?? 1,
+    maxAncho: topes.get(t.reglaId)?.maxAncho ?? 0,
+    minAlto: topes.get(t.reglaId)?.minAlto ?? 1,
+    maxAlto: topes.get(t.reglaId)?.maxAlto ?? 0,
+  }));
 
   const url = new URL(request.url);
-  const reglaId = url.searchParams.get("reglaId") ?? reglas[0]?.id ?? "";
+  const tramaId = url.searchParams.get("tramaId") ?? reglas[0]?.id ?? "";
 
-  const [pliegos, caps] = reglaId
-    ? await Promise.all([estadoPliegos(shop, reglaId), capacidades(shop, reglaId)])
+  const [pliegos, caps] = tramaId
+    ? await Promise.all([estadoPliegos(shop, tramaId), capacidades(shop, tramaId)])
     : [[] as PliegoEstado[], [] as Capacidad[]];
 
   return {
-    shop, reglas, reglaId, pliegos, caps,
+    shop, reglas, tramaId, pliegos, caps,
     escalonesLista: escalones(caps) as Escalon[],
     ttl: RESERVA_TTL_MIN,
   };
@@ -94,19 +113,24 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   const shop = session.shop;
   const fd = await request.formData();
   const intent = String(fd.get("intent") ?? "probar");
-  const reglaId = String(fd.get("reglaId") ?? "");
+  const tramaId = String(fd.get("tramaId") ?? "");
 
-  if (!reglaId) return { error: "Selecciona una trama." };
+  if (!tramaId) return { error: "Selecciona una trama." };
 
   if (intent === "limpiar") {
-    const n = await purgarDebug(shop, reglaId);
+    const n = await purgarDebug(shop, tramaId);
     return { mensaje: `Purgadas ${n} reserva(s) de diagnóstico.` };
   }
 
   if (intent === "reconciliar") {
-    const r = await reconciliar(shop, reglaId);
+    // ⚠️ `reconciliar()` sigue siendo POR REGLA: es donde vive
+    // `ReservaPliego.reglaId`. Hay que traducir la trama a su regla.
+    const t = await tramaPorId(shop, tramaId);
+    if (!t) return { error: "La trama no existe." };
+    const r = await reconciliar(shop, t.reglaId);
     return {
-      mensaje: `Reconciliación: ${r.revisadas} revisadas · ${r.confirmadas} confirmadas · ${r.anuladas} anuladas · ${r.sinResolver} sin resolver.`,
+      mensaje: `Reconciliación de la regla "${t.reglaNombre}" (afecta a todas sus tramas): ` +
+        `${r.revisadas} revisadas · ${r.confirmadas} confirmadas · ${r.anuladas} anuladas · ${r.sinResolver} sin resolver.`,
     };
   }
 
@@ -133,22 +157,22 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 
   try {
     for (const c of casos) {
-      const antes = await estadoPliegos(shop, reglaId);
+      const antes = await estadoPliegos(shop, tramaId);
       // El veredicto se calcula ANTES de reservar y con la misma escalera que
       // verá el motor: es el "por qué" de la fila, y permite ver de un vistazo
       // si el bloqueo vino del escalón del ancho o de falta de largo.
-      const v = evaluar(c.anchoCm, c.altoCm, await capacidades(shop, reglaId));
+      const v = evaluar(c.anchoCm, c.altoCm, await capacidades(shop, tramaId));
       const escalon = `${v.escalonCm ?? "—"} · ${v.motivo}`;
       const refId = `${PREFIJO}${Date.now()}_${c.anchoCm}x${c.altoCm}`;
       refIds.push(refId);
 
-      const res = await reservar(shop, reglaId, [
+      const res = await reservar(shop, tramaId, [
         { refId, anchoCm: c.anchoCm, altoCm: c.altoCm },
       ]);
 
       if (res.ok) {
         const r = res.reservas[0];
-        const despues = await estadoPliegos(shop, reglaId);
+        const despues = await estadoPliegos(shop, tramaId);
         const dAntes = antes.find((p) => p.id === r.pliegoId)?.disponibleCm ?? 0;
         const dDespues = despues.find((p) => p.id === r.pliegoId)?.disponibleCm ?? 0;
         filas.push({
@@ -190,8 +214,8 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   if (intent === "matriz") {
     const refId = `${PREFIJO}idem_${Date.now()}`;
     try {
-      const a = await reservar(shop, reglaId, [{ refId, anchoCm: 100, altoCm: 300 }]);
-      const b = await reservar(shop, reglaId, [{ refId, anchoCm: 100, altoCm: 300 }]);
+      const a = await reservar(shop, tramaId, [{ refId, anchoCm: 100, altoCm: 300 }]);
+      const b = await reservar(shop, tramaId, [{ refId, anchoCm: 100, altoCm: 300 }]);
       const mismaFila =
         a.ok && b.ok && a.reservas[0].reservaId === b.reservas[0].reservaId && b.reservas[0].yaExistia;
       idempotencia = mismaFila
@@ -209,7 +233,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     try {
       const r = await reservar(
         shop,
-        reglaId,
+        tramaId,
         refs.map((refId) => ({ refId, anchoCm: 90, altoCm: 2000 })),
       );
       if (r.ok) {
@@ -226,30 +250,36 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     }
   }
 
-  const caps = await capacidades(shop, reglaId);
-  const residuales = await contarDebug(shop, reglaId);
+  const caps = await capacidades(shop, tramaId);
+  const residuales = await contarDebug(shop, tramaId);
 
   return { filas, idempotencia, reparto, caps, residuales };
 };
 
 // ── Helpers de limpieza (solo diagnóstico) ──────────────────────────────────
 
-async function purgarDebug(shop: string, reglaId: string): Promise<number> {
+// ⚠️ `ReservaPliego` NO tiene columna `tramaId`: guarda `reglaId` y cuelga del
+// pliego. La trama se deriva por el pliego, que es exacto y es lo que permitió
+// no migrar ni una sola reserva existente (§4.4).
+async function purgarDebug(shop: string, tramaId: string): Promise<number> {
   const { neon } = await import("@neondatabase/serverless");
   const sql = neon(process.env.DIRECT_URL ?? process.env.DATABASE_URL!);
   const filas = await sql`
-    DELETE FROM "ReservaPliego"
-    WHERE shop = ${shop} AND "reglaId" = ${reglaId} AND "refId" LIKE ${PREFIJO + "%"}
-    RETURNING "id"`;
+    DELETE FROM "ReservaPliego" r
+    USING "Pliego" p
+    WHERE p.id = r."pliegoId"
+      AND r.shop = ${shop} AND p."tramaId" = ${tramaId} AND r."refId" LIKE ${PREFIJO + "%"}
+    RETURNING r."id"`;
   return filas.length;
 }
 
-async function contarDebug(shop: string, reglaId: string): Promise<number> {
+async function contarDebug(shop: string, tramaId: string): Promise<number> {
   const { neon } = await import("@neondatabase/serverless");
   const sql = neon(process.env.DIRECT_URL ?? process.env.DATABASE_URL!);
   const filas = await sql`
-    SELECT COUNT(*)::int AS n FROM "ReservaPliego"
-    WHERE shop = ${shop} AND "reglaId" = ${reglaId} AND "refId" LIKE ${PREFIJO + "%"}`;
+    SELECT COUNT(*)::int AS n FROM "ReservaPliego" r
+    JOIN "Pliego" p ON p.id = r."pliegoId"
+    WHERE r.shop = ${shop} AND p."tramaId" = ${tramaId} AND r."refId" LIKE ${PREFIJO + "%"}`;
   return Number((filas[0] as any).n);
 }
 
@@ -291,13 +321,13 @@ const aviso: React.CSSProperties = {
 const m = (cm: number) => `${(cm / 100).toFixed(2)} m`;
 
 export default function PliegosDebug() {
-  const { reglas, reglaId, pliegos, caps, escalonesLista, ttl } = useLoaderData<typeof loader>();
+  const { reglas, tramaId, pliegos, caps, escalonesLista, ttl } = useLoaderData<typeof loader>();
   const data = useActionData<typeof action>();
   const nav = useNavigation();
   const corriendo = nav.state === "submitting";
   const [params, setParams] = useSearchParams();
 
-  const regla = reglas.find((r) => r.id === reglaId);
+  const regla = reglas.find((r) => r.id === tramaId);
   // El producto de prueba tiene topes irreales (maxAncho/maxAlto = 21). El motor
   // los ignora a propósito; el aviso está para que no sorprenda en la Fase 5/6.
   const topesSospechosos = !!regla && (regla.maxAncho < 50 || regla.maxAlto < 50);
@@ -316,12 +346,12 @@ export default function PliegosDebug() {
 
         {/* Selector de trama */}
         <div style={card}>
-          <label style={label} htmlFor="reglaSel">Trama (regla de medidas)</label>
+          <label style={label} htmlFor="tramaSel">Trama (cada trama tiene su propio inventario)</label>
           <select
-            id="reglaSel"
+            id="tramaSel"
             style={input}
-            value={reglaId}
-            onChange={(e) => setParams({ reglaId: e.target.value })}
+            value={tramaId}
+            onChange={(e) => setParams({ tramaId: e.target.value })}
           >
             {reglas.map((r) => (
               <option key={r.id} value={r.id}>{r.nombre} — {r.id}</option>
@@ -401,7 +431,7 @@ export default function PliegosDebug() {
         <div style={card}>
           <h3 style={{ margin: "0 0 12px", fontSize: 15 }}>Probar una medida</h3>
           <Form method="post">
-            <input type="hidden" name="reglaId" value={reglaId} />
+            <input type="hidden" name="tramaId" value={tramaId} />
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr auto", gap: 12, alignItems: "end" }}>
               <div>
                 <label style={label} htmlFor="anchoCm">Ancho (cm)</label>
@@ -419,19 +449,19 @@ export default function PliegosDebug() {
 
           <div style={{ display: "flex", gap: 10, marginTop: 14, flexWrap: "wrap" }}>
             <Form method="post">
-              <input type="hidden" name="reglaId" value={reglaId} />
+              <input type="hidden" name="tramaId" value={tramaId} />
               <button type="submit" name="intent" value="matriz" style={btnAlt} disabled={corriendo}>
                 Correr la matriz del plan
               </button>
             </Form>
             <Form method="post">
-              <input type="hidden" name="reglaId" value={reglaId} />
+              <input type="hidden" name="tramaId" value={tramaId} />
               <button type="submit" name="intent" value="reconciliar" style={btnAlt} disabled={corriendo}>
                 Forzar reconciliación
               </button>
             </Form>
             <Form method="post">
-              <input type="hidden" name="reglaId" value={reglaId} />
+              <input type="hidden" name="tramaId" value={tramaId} />
               <button type="submit" name="intent" value="limpiar" style={btnAlt} disabled={corriendo}>
                 Purgar reservas de diagnóstico
               </button>

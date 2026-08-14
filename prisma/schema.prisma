@@ -39,18 +39,53 @@ model ReglaPersonalizada {
   maxAncho         Int
   minAlto          Int
   maxAlto          Int
+  /// Precio por m² de la regla. Desde 2026-08-14 el precio efectivo sale de
+  /// `Trama.precioPorM2` (§4.4); esto queda como fallback para reglas SIN
+  /// tramas y es el valor que se migró a la trama en el backfill.
   precioPorM2      Float
+  /// El impermeabilizador NO depende del tejido: sigue siendo de la regla.
   waterproofActivo Boolean  @default(true)
   waterproofPorM2  Float    @default(0)
   activa           Boolean  @default(true)
   productIds       String[] @default([])
   bordes           Json     @default("[]")
-  /// Hasta 4 slots {url, nombre}. Mismo patrón que `bordes`, pero sin `tipo`.
-  /// Se guardan los 4 slots tal cual (incluidos los vacíos); el filtrado de
-  /// "slot completo" se hace al leer, como con bordes en /api/precio.
+  /// ⚠️ COLUMNA MUERTA desde 2026-08-14 (§4.4). Las tramas pasaron a ser el
+  /// modelo `Trama` (tabla real con id) para poder colgarles rollos y precio.
+  /// Se conserva sin lectores durante un release para que el rollback sea
+  /// revertir el código sin tocar datos. NO leer de aquí: usar `tramasRel`.
   tramas           Json     @default("[]")
   createdAt        DateTime @default(now())
   pliegos          Pliego[]
+  tramasRel        Trama[]
+}
+
+/// Una trama = un tejido con su PROPIO inventario de rollos y su PROPIO precio
+/// por m². Hasta 2026-08-14 esto era `ReglaPersonalizada.tramas Json`, sin
+/// identidad propia; ver §4.4 de la bitácora para por qué se convirtió en tabla.
+///
+/// ⚠️ Ojo con la terminología heredada: en el módulo de pliegos "trama" se usó
+/// durante las Fases 1-7 para referirse a la `ReglaPersonalizada` entera. Los
+/// nombres `reservasDeTrama()` / `cortesDeTrama()` / `movimientosDeTrama()`
+/// vienen de ahí, pero desde 2026-08-14 operan sobre ESTE modelo.
+model Trama {
+  id          String             @id @default(cuid())
+  shop        String
+  reglaId     String
+  regla       ReglaPersonalizada @relation(fields: [reglaId], references: [id], onDelete: Restrict)
+  nombre      String
+  url         String             @default("")
+  /// Posición en el selector del widget (0-3). Conserva el orden de los slots.
+  orden       Int                @default(0)
+  /// Precio por m² PROPIO. Las fórmulas de precio NO cambiaron: solo cambia de
+  /// dónde sale este factor (antes `ReglaPersonalizada.precioPorM2`).
+  precioPorM2 Float              @default(0)
+  /// Baja lógica, nunca DELETE — mismo criterio que `Pliego.activo` (§4.3).
+  activa      Boolean            @default(true)
+  createdAt   DateTime           @default(now())
+  pliegos     Pliego[]
+
+  @@unique([reglaId, nombre])
+  @@index([shop, reglaId, activa])
 }
 
 model PedidoCustom {
@@ -87,8 +122,15 @@ model PedidoCustom {
 model Pliego {
   id              String             @id @default(cuid())
   shop            String
-  reglaId         String // = la trama
+  /// El producto. Redundante vía `trama`, pero se conserva: quitarlo obligaría
+  /// a reescribir consultas y FKs sin ganar nada, y sirve para las vistas por regla.
+  reglaId         String
   regla           ReglaPersonalizada @relation(fields: [reglaId], references: [id], onDelete: Restrict)
+  /// 🔷 EL DUEÑO REAL DEL STOCK desde 2026-08-14 (§4.4). NOT NULL a propósito:
+  /// el invariante es que no existen pliegos sin trama. Restrict impide dar de
+  /// baja una trama con rollos colgando.
+  tramaId         String
+  trama           Trama              @relation(fields: [tramaId], references: [id], onDelete: Restrict)
   codigo          String // "CEN-400-01" — autogenerado, editable
   anchoCm         Int
   largoTotalCm    Int
@@ -101,7 +143,8 @@ model Pliego {
   movimientos     MovimientoPliego[]
 
   @@unique([shop, codigo])
-  @@index([shop, reglaId, activo, anchoCm]) // índice que usa el selector
+  @@index([shop, tramaId, activo, anchoCm]) // índice que usa el selector (§4.4)
+  @@index([shop, reglaId, activo, anchoCm]) // vistas por regla
 }
 
 /// Ocupación temporal del pliego. Una reserva 'pendiente' de más de 15 min

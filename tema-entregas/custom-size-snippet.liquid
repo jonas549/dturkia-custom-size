@@ -108,7 +108,8 @@
          mismo diseño a propósito, así solo hay un sitio donde tocar estilos. -->
     <div id="csw-tramas-section" style="display:none">
       <div class="csw-bordes-head">
-        <p class="csw-bordes-ttl">Elige la trama <small>El tejido con el que se fabrica tu alfombra.</small></p>
+        <p class="csw-bordes-ttl">Selecciona una trama para poder calcular costos
+          <small>Cada trama tiene su propio precio y sus propias medidas disponibles.</small></p>
         <span class="csw-bordes-sel" id="csw-trama-sel-label"></span>
       </div>
       <div class="csw-bordes-grid" id="csw-tramas-grid"></div>
@@ -814,7 +815,7 @@
      anterior y el widget validaba con la regla vieja, permitiendo medidas
      imposibles.
   --------------------------------------------------------------------------- */
-  var CSW_VERSION = '2026-08-14b-layout-tramas-carrusel';
+  var CSW_VERSION = '2026-08-14c-stock-y-precio-por-trama';
   console.log('%c[CSW] snippet ' + CSW_VERSION,
               'background:#111;color:#7CFC00;padding:2px 8px;border-radius:3px;font-weight:bold');
 
@@ -1076,18 +1077,27 @@
   }
 
   /* ── Tramas ───────────────────────────────────────────────────────────────
-     Clon de `renderBordes()` con dos diferencias y ninguna más:
-       · el dato no tiene `tipo`, así que la tarjeta pinta solo el nombre (en el
-         renglón destacado, `csw-b-tipo`); se omite el renglón pequeño en vez de
-         inventarse un texto.
-       · la selección es OBLIGATORIA: mientras no haya una, `refrescarBoton()`
-         deja el botón deshabilitado.
-     Todo lo demás (clases, grid, badge, teclado, preselección) es idéntico a
-     bordes a propósito.
+     🔷 STOCK Y PRECIO POR TRAMA (§4.4). Una trama ya no es solo una foto con un
+     nombre: es la unidad que decide TRES cosas a la vez, y por eso no se puede
+     calcular nada hasta que el cliente elija una.
+
+       · su PRECIO por m²        → `calcular()` recibe el de la trama elegida
+       · sus TOPES de slider     → min(tope comercial, lo que dan sus rollos)
+       · su ESCALERA de stock    → qué medidas son vendibles
+
+     De ahí el flujo: sin trama elegida los sliders están BLOQUEADOS y no hay
+     precio; al elegir una se habilitan, se aplican sus topes (con clamp del
+     valor actual al nuevo rango) y se valida el stock contra SUS rollos.
+
+     Cada tarjeta guarda su trama entera en el closure, así que cambiar de trama
+     NO hace otra llamada a /api/precio: todo vino en la primera respuesta.
+
+     Si la regla trae UNA SOLA trama se auto-selecciona al cargar, para no
+     obligar a un clic que no decide nada.
   --------------------------------------------------------------------------- */
   var tramaSeleccionada = null;
   var tramaRequerida    = false;   /* solo si la regla trae al menos 1 trama */
-  var alCambiarTrama    = null;    /* lo engancha init() para refrescar el botón */
+  var alCambiarTrama    = null;    /* lo engancha init() para refrescar todo */
 
   function renderTramas(tramas, preselect) {
     if (!tramas || !tramas.length) return;
@@ -1102,6 +1112,8 @@
     if (tramas.length === 4) {
       grid.style.gridTemplateColumns = 'repeat(2, 1fr)';
     }
+
+    var primeraTarjeta = null;
 
     tramas.forEach(function(trama) {
       var card = document.createElement('div');
@@ -1131,19 +1143,34 @@
       var elNombre = document.createElement('p');
       elNombre.className = 'csw-b-tipo';   /* el renglón destacado */
       elNombre.textContent = trama.nombre;
-
       meta.appendChild(elNombre);
+
+      /* Una trama puede estar agotada mientras su hermana no lo está, así que
+         se marca en la propia tarjeta: es la única forma de que el cliente
+         entienda por qué esa sí y esa no. Se puede seleccionar igual — al
+         hacerlo sale el aviso con el nombre. */
+      if (trama.agotada) {
+        var elAgot = document.createElement('p');
+        elAgot.className = 'csw-b-nombre';
+        elAgot.textContent = 'Agotada';
+        elAgot.style.color = '#8f1c1c';
+        elAgot.style.fontWeight = '600';
+        meta.appendChild(elAgot);
+        card.classList.add('csw-b-card--agotada');
+        card.style.opacity = '0.65';
+      }
+
       card.appendChild(thumb);
       card.appendChild(meta);
 
       function marcar() {
         grid.querySelectorAll('.csw-b-card').forEach(function(c) { c.classList.remove('is-selected'); });
         card.classList.add('is-selected');
-        tramaSeleccionada = { nombre: trama.nombre };
+        /* Se guarda la trama ENTERA: de aquí salen el precio, los topes y la
+           escalera de stock que usa el resto del widget. */
+        tramaSeleccionada = trama;
         if (selLbl) selLbl.innerHTML = 'Seleccionada: <b>' + trama.nombre + '</b>';
       }
-
-      if (preselect && preselect === trama.nombre) marcar();
 
       function seleccionar() {
         marcar();
@@ -1155,10 +1182,24 @@
         if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); seleccionar(); }
       });
 
+      if (!primeraTarjeta) primeraTarjeta = seleccionar;
+      if (preselect && preselect === trama.nombre) card.dataset.cswPreselect = '1';
+
       grid.appendChild(card);
     });
 
     section.style.display = '';
+
+    /* Preselección (modo edición) y auto-selección con una sola trama. Las dos
+       pasan por `seleccionar()` para que apliquen precio y topes, no solo el
+       resaltado de la tarjeta. */
+    var preCard = preselect ? grid.querySelector('[data-csw-preselect="1"]') : null;
+    if (preCard) {
+      preCard.click();
+    } else if (tramas.length === 1 && primeraTarjeta) {
+      console.log('[CSW] la regla tiene UNA sola trama → auto-seleccionada:', tramas[0].nombre);
+      primeraTarjeta();
+    }
   }
 
   /* ── Reubicación del layout (Fase 3) ──────────────────────────────────────
@@ -1306,36 +1347,33 @@
         }
 
         var regla            = data.regla;
-        var precioPorM2      = data.precioPorM2     || 0;
         var waterproofPorM2  = data.waterproofPorM2 || 0;
         var waterproofActivo = !!data.waterproofActivo;
 
-        /* Stock por pliego (Fase 6). `reglaId` viaja al item de localStorage
-           para que el checkout sepa de qué trama es la alfombra. */
-        var reglaId          = data.reglaId || '';
-        var capacidades      = data.capacidades;              /* puede ser undefined */
-        var controlDeStock   = Array.isArray(capacidades);    /* false = trama sin pliegos */
-        /* Agotada = ningún escalón con material. Ya NO basta con mirar si el
-           arreglo viene vacío: ahora también viajan los anchos secos (con
-           largoMaxCm 0) porque son los que definen la escalera. */
-        var tramaAgotada     = controlDeStock && !hayMaterial(capacidades);
+        /* 🔷 §4.4 — TODO lo que depende de la trama vive en estas variables, y
+           las tres se rellenan al elegir trama (o quedan neutras si la regla no
+           tiene tramas). Antes salían de la regla y eran constantes. */
+        var precioPorM2    = 0;      /* precio/m² de la trama elegida */
+        var capacidades    = undefined; /* escalera de la trama elegida */
+        var controlDeStock = false;  /* false = esa trama no tiene rollos */
+        var tramaAgotada   = false;  /* ningún escalón de ESA trama con material */
 
-        if (!controlDeStock) {
-          console.log('[CSW] capacidades NO vino en /api/precio → esta trama no tiene pliegos ' +
-                      'cargados, el widget NO controla stock (comportamiento de siempre)');
+        var reglaId  = data.reglaId || '';
+        var tramas   = Array.isArray(data.tramas) ? data.tramas : [];
+
+        /* Sin tramas la regla se comporta EXACTAMENTE como antes de este
+           cambio: precio de la regla, topes de la regla, sin control de stock.
+           Es el caso de los productos que nunca usaron tramas. */
+        var sinTramas = tramas.length === 0;
+        if (sinTramas) {
+          precioPorM2 = data.precioPorM2 || 0;
+          console.log('[CSW] esta regla no tiene tramas → precio y topes de la regla, sin control ' +
+                      'de stock (comportamiento de siempre)');
         } else {
-          console.log('[CSW] capacidades recibidas:', JSON.stringify(capacidades));
-          var escalera = [], desde = 1;
-          for (var ci = 0; ci < capacidades.length; ci++) {
-            escalera.push('ancho pedido ' + desde + '-' + capacidades[ci].anchoCm +
-                          ' → rollo ' + capacidades[ci].anchoCm +
-                          ', largo ≤ ' + capacidades[ci].largoMaxCm +
-                          (capacidades[ci].largoMaxCm <= 0 ? ' (SECO)' : ''));
-            desde = capacidades[ci].anchoCm + 1;
-          }
-          console.log('[CSW] escalones (el escalón lo fija el ANCHO pedido; un escalón seco ' +
-                      'NO salta al de arriba): ' + escalera.join('  ·  ') +
-                      (tramaAgotada ? '  ·  SIN MATERIAL EN NINGUNO (agotada)' : ''));
+          console.log('[CSW] ' + tramas.length + ' trama(s):', tramas.map(function (t) {
+            return t.nombre + ' (' + t.precioPorM2 + '/m², ' +
+                   (t.capacidades ? (t.agotada ? 'AGOTADA' : t.capacidades.length + ' escalones') : 'sin rollos') + ')';
+          }).join('  ·  '));
         }
 
         var sAncho   = eid('csw-ancho');
@@ -1352,6 +1390,43 @@
         eid('csw-ancho-max').textContent = regla.maxAncho + ' cm';
         eid('csw-alto-min').textContent  = regla.minAlto  + ' cm';
         eid('csw-alto-max').textContent  = regla.maxAlto  + ' cm';
+
+        /* 🔷 Los topes son POR TRAMA: el rollo más ancho con material de una
+           trama no tiene por qué ser el de la otra. Al cambiar de trama se
+           reaplican y el valor actual se mete a la fuerza dentro del nuevo
+           rango (clamp), porque si no el slider se queda con un número que ya
+           no puede representar. */
+        function aplicarTopes(t) {
+          var r = (t && t.regla) ? t.regla : regla;
+          var nAncho = Math.min(Math.max(parseInt(sAncho.value, 10) || r.minAncho, r.minAncho), r.maxAncho);
+          var nAlto  = Math.min(Math.max(parseInt(sAlto.value,  10) || r.minAlto,  r.minAlto),  r.maxAlto);
+
+          sAncho.min = r.minAncho; sAncho.max = r.maxAncho; sAncho.value = nAncho;
+          sAlto.min  = r.minAlto;  sAlto.max  = r.maxAlto;  sAlto.value  = nAlto;
+
+          eid('csw-ancho-val').textContent = nAncho;
+          eid('csw-alto-val').textContent  = nAlto;
+          eid('csw-ancho-min').textContent = r.minAncho + ' cm';
+          eid('csw-ancho-max').textContent = r.maxAncho + ' cm';
+          eid('csw-alto-min').textContent  = r.minAlto  + ' cm';
+          eid('csw-alto-max').textContent  = r.maxAlto  + ' cm';
+        }
+
+        /* Sin trama elegida los sliders no se pueden tocar y no hay precio: el
+           precio y las medidas vendibles DEPENDEN de la trama, así que enseñar
+           un número antes de elegirla sería enseñar un número inventado. */
+        function bloquearSliders(bloqueado) {
+          sAncho.disabled = bloqueado;
+          sAlto.disabled  = bloqueado;
+          var op = bloqueado ? '0.45' : '';
+          var grupos = root.querySelectorAll('.csw-slider-group');
+          for (var i = 0; i < grupos.length; i++) {
+            grupos[i].style.opacity = op;
+            grupos[i].style.pointerEvents = bloqueado ? 'none' : '';
+          }
+          var resumen = root.querySelector('.csw-resumen');
+          if (resumen) resumen.style.display = bloqueado ? 'none' : '';
+        }
 
         if (enModoEdicion) {
           if (editAncho >= parseInt(regla.minAncho) && editAncho <= parseInt(regla.maxAncho)) {
@@ -1394,15 +1469,13 @@
           }
         }
 
-        calcular(precioPorM2, waterproofPorM2, waterproofActivo);
-
         /* Stock por pliego (Fase 6): valida el PAR y habilita/deshabilita el
-           botón. Sin control de stock no toca nada. */
+           botón. 🔷 Ahora contra la escalera de LA TRAMA ELEGIDA. */
         function revisarDisponibilidad() {
           var btn = eid('csw-agregar');
           if (!btn) return true;
 
-          if (!controlDeStock) {          /* trama sin pliegos → como siempre */
+          if (!controlDeStock) {          /* trama sin rollos → como siempre */
             btn.disabled = false;
             mostrarStock('');
             return true;
@@ -1410,7 +1483,14 @@
 
           if (tramaAgotada) {
             btn.disabled = true;
-            mostrarStock('Agotado', true);
+            /* El mensaje dice QUÉ trama está agotada: con varias tramas, un
+               "Agotado" a secas no le dice al cliente que pruebe la otra. */
+            mostrarStock(
+              tramaSeleccionada
+                ? 'La trama ' + tramaSeleccionada.nombre + ' está agotada. Prueba con otra trama.'
+                : 'Agotado',
+              true,
+            );
             return false;
           }
 
@@ -1419,66 +1499,111 @@
           var cabe = cabeEnCapacidades(a, l, capacidades);
 
           btn.disabled = !cabe;
-          mostrarStock(cabe ? '' : 'Esta medida no está disponible en esta trama.');
+          mostrarStock(cabe ? '' : (
+            'Esta medida no está disponible en la trama ' +
+            (tramaSeleccionada ? tramaSeleccionada.nombre : '') + '. Prueba con otra medida u otra trama.'
+          ));
           return cabe;
         }
 
-        /* Trama obligatoria (Fase 3).
-           `tramaRequerida` solo se pone a true si la regla trae al menos una
-           trama válida: una regla sin tramas NO puede quedar bloqueada, igual
-           que en pliegos una trama sin rollos nunca bloquea la venta. */
+        /* `tramaRequerida` solo se pone a true si la regla trae al menos una
+           trama: una regla SIN tramas no puede quedar bloqueada, igual que una
+           trama sin rollos nunca bloquea la venta. */
         function faltaElegirTrama() {
           return tramaRequerida && !tramaSeleccionada;
         }
 
         /* EL ÚNICO sitio que decide si el botón se habilita.
-           El stock manda primero y con su propio mensaje: si la medida no es
-           vendible, se sale de aquí sin tocar nada más, así la lógica de
-           pliegos queda exactamente como estaba. La trama solo puede bloquear
-           ADICIONALMENTE, nunca desbloquear. */
+           🔷 La precedencia se INVIRTIÓ respecto a la versión anterior, y no es
+           un detalle de orden: con el stock por trama no HAY stock que evaluar
+           hasta que exista una trama elegida, porque la escalera es suya. Así
+           que primero la trama, y solo después el stock. */
         function refrescarBoton() {
-          var okStock = revisarDisponibilidad();
           var btn = eid('csw-agregar');
-          if (!okStock) {
-            mostrarTramaAviso(false);
+
+          if (faltaElegirTrama()) {
+            if (btn) btn.disabled = true;
+            bloquearSliders(true);
+            mostrarStock('');
+            mostrarTramaAviso(true);
             return false;
           }
-          var falta = faltaElegirTrama();
-          if (btn) btn.disabled = falta;
-          mostrarTramaAviso(falta);
-          return !falta;
+
+          bloquearSliders(false);
+          mostrarTramaAviso(false);
+          return revisarDisponibilidad();
         }
 
         function mostrarTramaAviso(visible) {
           var el = eid('csw-trama-aviso');
           if (!el) return;
-          el.textContent = visible ? 'Elige una trama para continuar.' : '';
+          el.textContent = visible ? 'Selecciona una trama para continuar.' : '';
           el.style.display = visible ? '' : 'none';
         }
 
-        /* Al elegir una trama hay que re-evaluar el botón. */
-        alCambiarTrama = refrescarBoton;
+        /* Al elegir una trama cambian las TRES cosas: precio, topes y escalera.
+           Este es el único sitio donde se aplican, para que no puedan quedar
+           desincronizadas entre sí. */
+        alCambiarTrama = function () {
+          if (tramaSeleccionada) {
+            precioPorM2    = tramaSeleccionada.precioPorM2 || 0;
+            capacidades    = tramaSeleccionada.capacidades;
+            controlDeStock = Array.isArray(capacidades);
+            tramaAgotada   = controlDeStock && !hayMaterial(capacidades);
 
-        renderTramas(data.tramas || [], editTrama);
+            aplicarTopes(tramaSeleccionada);
+
+            if (!controlDeStock) {
+              console.log('[CSW] trama "' + tramaSeleccionada.nombre + '" sin rollos cargados → ' +
+                          'sin control de stock. Precio/m² = ' + precioPorM2);
+            } else {
+              var escalera = [], desde = 1;
+              for (var ci = 0; ci < capacidades.length; ci++) {
+                escalera.push('ancho pedido ' + desde + '-' + capacidades[ci].anchoCm +
+                              ' → rollo ' + capacidades[ci].anchoCm +
+                              ', largo ≤ ' + capacidades[ci].largoMaxCm +
+                              (capacidades[ci].largoMaxCm <= 0 ? ' (SECO)' : ''));
+                desde = capacidades[ci].anchoCm + 1;
+              }
+              console.log('[CSW] trama "' + tramaSeleccionada.nombre + '" · precio/m² = ' + precioPorM2 +
+                          ' · topes ' + sAncho.max + '×' + sAlto.max +
+                          ' · escalones: ' + escalera.join('  ·  ') +
+                          (tramaAgotada ? '  ·  SIN MATERIAL EN NINGUNO (agotada)' : ''));
+            }
+          }
+          calcular(precioPorM2, waterproofPorM2, waterproofActivo);
+          refrescarBoton();
+        };
+
         renderBordes(data.bordes || [], editBorde);
+        /* renderTramas va DESPUÉS de definir alCambiarTrama: la auto-selección
+           con una sola trama dispara el cambio dentro de esta misma llamada. */
+        renderTramas(tramas, editTrama);
 
+        /* Estado inicial. Con tramas y sin elegir, los sliders nacen bloqueados
+           y sin precio; sin tramas, todo como siempre. */
+        if (sinTramas) {
+          calcular(precioPorM2, waterproofPorM2, waterproofActivo);
+          bloquearSliders(false);
+        }
         refrescarBoton();
 
         /* Red de seguridad: si algo del tema vuelve a habilitar el botón por su
            cuenta, se re-deshabilita. Solo actúa cuando la compra NO es válida,
            así que nunca pelea con el flujo normal. */
-        if ((controlDeStock || tramaRequerida) && window.MutationObserver) {
+        if ((tramaRequerida || controlDeStock) && window.MutationObserver) {
           var btnRef = eid('csw-agregar');
           if (btnRef) {
             new MutationObserver(function () {
-              if (btnRef.disabled) return;
+              if (btnRef.disabled) return;   /* no re-entrar: solo actúa si algo lo habilitó */
+              var faltaTrama = faltaElegirTrama();
               var a = parseInt(sAncho.value, 10);
               var l = parseInt(sAlto.value,  10);
-              var malStock = controlDeStock &&
+              var malStock = !faltaTrama && controlDeStock &&
                              (tramaAgotada || !cabeEnCapacidades(a, l, capacidades));
-              if (malStock || faltaElegirTrama()) {
+              if (faltaTrama || malStock) {
                 console.log('[CSW] el botón fue re-habilitado por fuera → se deshabilita de nuevo',
-                            malStock ? '(stock)' : '(falta trama)');
+                            faltaTrama ? '(falta elegir trama)' : '(stock de la trama)');
                 btnRef.disabled = true;
               }
             }).observe(btnRef, { attributes: true, attributeFilter: ['disabled'] });
@@ -1552,8 +1677,10 @@
           var bordeStr       = bordeSeleccionado
             ? (bordeSeleccionado.nombre + ' - ' + bordeSeleccionado.tipo)
             : null;
-          /* La trama solo tiene nombre, así que el snapshot es el nombre pelado. */
+          /* El nombre es el snapshot que ve el taller en el pedido; el id es lo
+             que usa el checkout para reservar contra los rollos de ESA trama. */
           var tramaStr       = tramaSeleccionada ? tramaSeleccionada.nombre : null;
+          var tramaIdStr     = tramaSeleccionada ? (tramaSeleccionada.id || '') : '';
 
           try {
             var arr = [];
@@ -1588,6 +1715,7 @@
                   waterproofPrecio: precioWp,
                   borde:            bordeStr !== null ? bordeStr : (existing.borde || null),
                   trama:            tramaStr !== null ? tramaStr : (existing.trama || null),
+                  tramaId:          tramaIdStr || existing.tramaId || '',
                   variantId:        existing.variantId       || root.dataset.variantId    || '',
                   imageUrl:         existing.imageUrl        || root.dataset.imageUrl     || '',
                   productTitle:     existing.productTitle    || (document.querySelector('.product h1') || {}).textContent || '',
@@ -1599,7 +1727,7 @@
                 arr.push({
                   id: editId, shop: shop, reglaId: reglaId, ancho: anchoN, alto: altoN,
                   waterproof: !!wpChecked, precio: precioAlfombra, waterproofPrecio: precioWp,
-                  borde: bordeStr, trama: tramaStr,
+                  borde: bordeStr, trama: tramaStr, tramaId: tramaIdStr,
                   variantId: root.dataset.variantId || '', imageUrl: root.dataset.imageUrl || '',
                   productTitle: (document.querySelector('.product h1') || {}).textContent || '',
                   productHandle: root.dataset.productHandle || '', createdAt: Date.now()
@@ -1610,7 +1738,7 @@
               arr.push({
                 id: itemId, shop: shop, reglaId: reglaId, ancho: anchoN, alto: altoN,
                 waterproof: !!wpChecked, precio: precioAlfombra, waterproofPrecio: precioWp,
-                borde: bordeStr, trama: tramaStr,
+                borde: bordeStr, trama: tramaStr, tramaId: tramaIdStr,
                 variantId: root.dataset.variantId || '', imageUrl: root.dataset.imageUrl || '',
                 productTitle: (document.querySelector('.product h1') || {}).textContent || '',
                 productHandle: root.dataset.productHandle || '', createdAt: Date.now()

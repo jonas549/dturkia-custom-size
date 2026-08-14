@@ -15,6 +15,7 @@ import { useAppBridge } from "@shopify/app-bridge-react";
 import { authenticate } from "../shopify.server";
 import { boundary } from "@shopify/shopify-app-react-router/server";
 import prisma from "../db.server";
+import { guardarTramas, tramasDeRegla } from "../lib/pliegos.server";
 
 export const loader = async ({ request, params }: LoaderFunctionArgs) => {
   const { session, admin } = await authenticate.admin(request);
@@ -22,6 +23,10 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
     where: { id: params.id, shop: session.shop },
   });
   if (!regla) throw new Response("Regla no encontrada", { status: 404 });
+
+  // 🔷 §4.4 — las tramas son filas, no el Json de la regla. Viene el conteo de
+  // rollos para poder avisar de cuáles no se pueden quitar.
+  const tramasRel = await tramasDeRegla(session.shop, params.id!);
 
   // Obtener títulos de los productos guardados
   let productosExistentes: { id: string; title: string }[] = [];
@@ -44,7 +49,7 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
       .map((n: any) => ({ id: n.id as string, title: n.title as string }));
   }
 
-  return { regla, productosExistentes };
+  return { regla, productosExistentes, tramasRel };
 };
 
 export const action = async ({ request, params }: ActionFunctionArgs) => {
@@ -80,6 +85,17 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
         );
       } catch { /* metafield non-critical */ }
     }
+    // 🔷 §4.4 — `Trama.reglaId` tiene FK Restrict: una regla con tramas no se
+    // puede borrar. Se avisa antes de que Postgres lance el error crudo.
+    const tramasVivas = await tramasDeRegla(session.shop, params.id!, true);
+    if (tramasVivas.length) {
+      return {
+        error:
+          `No se puede eliminar esta regla: tiene ${tramasVivas.length} trama(s) ` +
+          `(${tramasVivas.map((t) => t.nombre).join(", ")}), y con ellas su stock e historial. ` +
+          `Quita primero las tramas y sus rollos.`,
+      };
+    }
     await prisma.reglaPersonalizada.deleteMany({
       where: { id: params.id, shop: session.shop },
     });
@@ -106,20 +122,25 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
     if (Array.isArray(parsed)) bordes = parsed;
   } catch { bordes = []; }
 
-  // Tramas: mismo patrón que bordes, pero con 2 campos en vez de 3.
-  // Se guardan los 4 slots tal cual, incluidos los incompletos, para que el
-  // merchant no pierda lo que llevaba escrito a medias al guardar.
-  let tramas: { url: string; nombre: string }[] = [];
+  // 🔷 Tramas (§4.4): ya NO son un Json de la regla, son filas de `Trama` con
+  // identidad propia, su inventario de rollos y su precio por m². El formulario
+  // sigue mandando los 4 slots; `guardarTramas()` los concilia con las filas.
+  let slotsTramas: Array<{ id?: string | null; nombre: string; url: string; precioPorM2: number }> = [];
   try {
     const parsed = JSON.parse(String(fd.get("tramas") ?? "[]"));
-    if (Array.isArray(parsed)) tramas = parsed;
-  } catch { tramas = []; }
+    if (Array.isArray(parsed)) slotsTramas = parsed;
+  } catch { slotsTramas = []; }
 
   const oldRegla = await prisma.reglaPersonalizada.findFirst({
     where: { id: params.id, shop: session.shop },
     select: { productIds: true },
   });
   const removedProductIds = (oldRegla?.productIds ?? []).filter((id) => !productIds.includes(id));
+
+  // Las tramas se guardan ANTES que la regla: si una trama con rollos se está
+  // intentando quitar, la operación se rechaza entera y no se toca nada más.
+  const resTramas = await guardarTramas(session.shop, params.id!, slotsTramas);
+  if (!resTramas.ok) return { error: resTramas.error };
 
   await prisma.reglaPersonalizada.updateMany({
     where: { id: params.id, shop: session.shop },
@@ -135,7 +156,8 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
       activa: fd.get("activa") === "on",
       productIds,
       bordes,
-      tramas,
+      // `tramas` (el Json) ya NO se escribe: es una columna muerta que se
+      // conserva un release para poder revertir sin tocar datos (§4.4).
     },
   });
 
@@ -290,11 +312,11 @@ type BordeItem = { imagenUrl: string; nombre: string; tipo: string };
 const emptyBorde = (): BordeItem => ({ imagenUrl: "", nombre: "", tipo: "" });
 
 /** Trama: como un borde pero SIN `tipo`. Solo imagen + nombre. */
-type TramaItem = { url: string; nombre: string };
-const emptyTrama = (): TramaItem => ({ url: "", nombre: "" });
+type TramaItem = { id: string | null; url: string; nombre: string; precioPorM2: string; rollos: number };
+const emptyTrama = (): TramaItem => ({ id: null, url: "", nombre: "", precioPorM2: "", rollos: 0 });
 
 export default function EditarRegla() {
-  const { regla, productosExistentes } = useLoaderData<typeof loader>();
+  const { regla, productosExistentes, tramasRel } = useLoaderData<typeof loader>();
   const actionData = useActionData<typeof action>();
   const navigation = useNavigation();
   const saving = navigation.state === "submitting";
@@ -330,21 +352,18 @@ export default function EditarRegla() {
   // de la regla y se completa hasta 4 con slots vacíos, para que el form siempre
   // muestre los 4 huecos aunque en la base haya menos.
   const [tramas, setTramas] = useState<TramaItem[]>(() => {
-    try {
-      const raw = (regla as any).tramas;
-      if (Array.isArray(raw)) {
-        const slots = raw.map((t: any) => ({
-          url:    String(t?.url    || ""),
-          nombre: String(t?.nombre || ""),
-        }));
-        while (slots.length < 4) slots.push(emptyTrama());
-        return slots.slice(0, 4);
-      }
-    } catch {}
-    return [emptyTrama(), emptyTrama(), emptyTrama(), emptyTrama()];
+    const slots: TramaItem[] = (tramasRel ?? []).map((t) => ({
+      id: t.id,
+      url: t.url,
+      nombre: t.nombre,
+      precioPorM2: t.precioPorM2 ? String(t.precioPorM2) : "",
+      rollos: t.rollos,
+    }));
+    while (slots.length < 4) slots.push(emptyTrama());
+    return slots;
   });
 
-  const actualizarTrama = (idx: number, field: keyof TramaItem, value: string) => {
+  const actualizarTrama = (idx: number, field: "url" | "nombre" | "precioPorM2", value: string) => {
     setTramas((prev) => prev.map((t, i) => (i === idx ? { ...t, [field]: value } : t)));
   };
 
@@ -650,19 +669,22 @@ export default function EditarRegla() {
             <input type="hidden" name="bordes" value={JSON.stringify(bordes)} />
           </div>
 
-          {/* Tramas — mismo patrón que Bordes, pero solo URL + Nombre.
-              Por ahora es solo carga: el widget de la tienda todavía no las
-              consume; se conectarán al frontend en el rediseño. */}
+          {/* 🔷 Tramas (§4.4) — cada trama es una fila con SU inventario de rollos
+              y SU precio por m². Vaciar un slot da de baja la trama; si tiene
+              rollos cargados, el guardado se rechaza. */}
           <div style={{ marginTop: 28, borderTop: "1px solid #e4e5e7", paddingTop: 20 }}>
             <span style={{ ...labelStyle, fontSize: 14, marginBottom: 4 }}>Tramas</span>
             <p style={{ fontSize: 13, color: "#6d7175", margin: "0 0 16px" }}>
               Hasta 4 tramas. Sube la imagen en Shopify Admin → Settings → Files, copia la URL CDN
-              y pégala aquí. Un slot con los 2 campos completos se guarda como válido; si alguno
-              está vacío, se ignora. <strong>Todavía no se muestran en la tienda</strong> — se
-              conectarán al configurador en el rediseño de la página de personalización.
+              y pégala aquí. <strong>Cada trama tiene su propio stock de rollos y su propio precio
+              por m²</strong>: el cliente elige la trama en la tienda y ahí se decide qué medidas
+              hay disponibles y cuánto cuesta. El stock se carga en{" "}
+              <strong>Stock de pliegos</strong>. Un slot necesita <strong>nombre</strong> para
+              guardarse; si lo vacías, la trama se da de baja (nunca se borra, para no perder el
+              historial), y si tiene rollos cargados no se deja quitar.
             </p>
             {tramas.map((trama, i) => {
-              const completo = !!(trama.url && trama.nombre);
+              const completo = !!trama.nombre;
               return (
                 <div
                   key={i}
@@ -677,8 +699,13 @@ export default function EditarRegla() {
                   <div style={{ fontSize: 12, fontWeight: 600, color: "#6d7175", marginBottom: 10, textTransform: "uppercase", letterSpacing: 0.5 }}>
                     Trama {i + 1}{trama.nombre ? ` — ${trama.nombre}` : ""}
                     {completo && <span style={{ marginLeft: 8, color: "#008060" }}>✓ Completo</span>}
+                    {trama.rollos > 0 && (
+                      <span style={{ marginLeft: 8, color: "#0070c4", textTransform: "none" }}>
+                        · {trama.rollos} rollo(s) cargado(s) — no se puede quitar
+                      </span>
+                    )}
                   </div>
-                  <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr", gap: 10, marginBottom: trama.url ? 10 : 0 }}>
+                  <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr 1fr", gap: 10, marginBottom: trama.url ? 10 : 0 }}>
                     <div>
                       <label style={labelStyle}>URL de la imagen</label>
                       <input
@@ -699,6 +726,18 @@ export default function EditarRegla() {
                         placeholder="Ceniza"
                       />
                     </div>
+                    <div>
+                      <label style={labelStyle}>Precio por m² (CLP)</label>
+                      <input
+                        type="number"
+                        min="0"
+                        step="1"
+                        value={trama.precioPorM2}
+                        onChange={(e) => actualizarTrama(i, "precioPorM2", e.target.value)}
+                        style={inputStyle}
+                        placeholder="70000"
+                      />
+                    </div>
                   </div>
                   {trama.url && (
                     <img
@@ -711,7 +750,19 @@ export default function EditarRegla() {
                 </div>
               );
             })}
-            <input type="hidden" name="tramas" value={JSON.stringify(tramas)} />
+            <input
+              type="hidden"
+              name="tramas"
+              value={JSON.stringify(
+                tramas.map((t) => ({
+                  id: t.id,
+                  nombre: t.nombre,
+                  url: t.url,
+                  // Vacío → 0, y /api/precio cae al precio de la regla.
+                  precioPorM2: Number(t.precioPorM2) || 0,
+                })),
+              )}
+            />
           </div>
 
           {/* Botones */}

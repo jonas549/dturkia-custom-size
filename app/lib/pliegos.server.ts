@@ -2,6 +2,20 @@
  * Motor de selección y reserva de pliegos — Fase 2
  * Ver BITACORA_STOCK_PLIEGOS_2026-08-12.md §5
  *
+ * 🔷 EL STOCK ES POR TRAMA (2026-08-14, §4.4). Hasta esta fecha los rollos
+ * colgaban de la REGLA (= el producto) y todas sus tramas compartían un pozo
+ * común. Ahora cada `Trama` tiene su propio inventario, y la validación y la
+ * reserva se hacen contra los rollos de la trama que eligió el cliente.
+ *
+ * ⚠️ La lógica de negocio de abajo NO cambió con eso: `escalonPara()`,
+ * `escalones()`, `evaluar()`, `factible()` y `hayMaterial()` son funciones puras
+ * sobre `Capacidad[]`. Lo único que cambió es DE DÓNDE sale ese `Capacidad[]`.
+ *
+ * ⚠️ Terminología heredada: durante las Fases 1-7 "trama" significaba la
+ * `ReglaPersonalizada` entera, y de ahí vienen los nombres `reservasDeTrama()`,
+ * `cortesDeTrama()` y `movimientosDeTrama()`. Desde 2026-08-14 esos nombres
+ * significan lo que dicen: operan sobre una `Trama`.
+ *
  * Reglas del dominio que este módulo implementa:
  *  - Una alfombra sale SIEMPRE de un solo pliego. No se parchan pliegos.
  *  - ESCALONES POR ANCHO DE ROLLO (§5.0): cada ancho de rollo que existe en la
@@ -122,8 +136,44 @@ export type PliegoEstado = {
  * regla) NO se aplica aquí: el híbrido `min(tope comercial, tope físico)` del
  * §2.4 se resuelve en /api/precio (Fase 5). Así el motor sigue siendo
  * verificable aunque una regla tenga topes mal configurados.
+ *
+ * 🔷 Desde 2026-08-14 la escalera es LA DE UNA TRAMA, no la de la regla: dos
+ * tramas del mismo producto tienen escaleras distintas e independientes.
  */
-export async function capacidades(shop: string, reglaId: string): Promise<Capacidad[]> {
+export async function capacidades(shop: string, tramaId: string): Promise<Capacidad[]> {
+  const sql = db();
+  const filas = await sql`
+    SELECT p."anchoCm",
+           GREATEST(MAX(p."largoRestanteCm" - COALESCE((
+             SELECT SUM(r."largoCm") FROM "ReservaPliego" r
+             WHERE r."pliegoId" = p.id
+               AND r.estado = 'pendiente'
+               AND r."createdAt" > NOW() - make_interval(mins => ${RESERVA_TTL_MIN}::int)
+           ), 0)), 0) AS "largoMaxCm"
+    FROM "Pliego" p
+    WHERE p.shop = ${shop} AND p."tramaId" = ${tramaId} AND p.activo
+    GROUP BY p."anchoCm"
+    ORDER BY p."anchoCm"
+  `;
+  return filas.map((f: any) => ({
+    anchoCm: Number(f.anchoCm),
+    largoMaxCm: Number(f.largoMaxCm),
+  }));
+}
+
+/**
+ * @deprecated Capacidad agrupada de TODA la regla, mezclando sus tramas.
+ *
+ * Existe solo para el campo `capacidades` de nivel superior de /api/precio, que
+ * es lo que consume el snippet VIEJO que todavía está pegado en el tema. Si ese
+ * campo desapareciera de golpe, la tienda dejaría de bloquear medidas hasta que
+ * se pegue el snippet nuevo. Se borra —junto con el campo— cuando el paste esté
+ * confirmado (§4.4).
+ *
+ * ⛔ No usar para nada nuevo: mezcla el stock de tramas distintas, que es
+ * exactamente lo que este cambio vino a arreglar.
+ */
+export async function capacidadesDeRegla(shop: string, reglaId: string): Promise<Capacidad[]> {
   const sql = db();
   const filas = await sql`
     SELECT p."anchoCm",
@@ -313,10 +363,21 @@ export function factible(anchoCm: number, altoCm: number, caps: Capacidad[]): bo
  *      ancho de ESE rollo. Para la normal siempre se cumple (es la definición
  *      del escalón); es la condición que descarta la rotada cuando el alto es
  *      más ancho que el rollo.
+ *
+ * 🔷🔴 STOCK POR TRAMA (2026-08-14) — EL PUNTO MÁS DELICADO DEL MÓDULO.
+ * `tramaId` aparece DOS VECES y las dos son imprescindibles:
+ *   a) en el WHERE de fuera → de qué trama son los CANDIDATOS.
+ *   b) dentro del `SELECT MIN(...)` → sobre qué rollos se calcula LA ESCALERA.
+ * Si solo se cambia (a), la escalera se computa con los rollos de TODAS las
+ * tramas del producto y el escalón resultante puede no existir en la trama
+ * pedida → SIN_STOCK falso, o peor, material de otra trama.
+ * Caso de regresión real con el inventario actual: Ceniza 350×300 debe salir de
+ * CEN-400; si la escalera se calculara mezclada, el MIN(>=350) sería 378 (un
+ * rollo de ALBA) y Ceniza se quedaría sin candidatos. Ver el fixture de 2 tramas.
  */
 async function reservarItem(
   shop: string,
-  reglaId: string,
+  tramaId: string,
   item: ItemReserva,
 ): Promise<ReservaAsignada | null> {
   const sql = db();
@@ -325,6 +386,7 @@ async function reservarItem(
   const filas = await sql`
     WITH cand AS (
       SELECT p.id AS "pliegoId",
+             p."reglaId",
              o."anchoReq",
              o.largo,
              o.rotada,
@@ -339,7 +401,8 @@ async function reservarItem(
                          (${altoCm}::int, ${anchoCm}::int, true))    -- orientación rotada
                  AS o("anchoReq", largo, rotada)
       WHERE p.shop = ${shop}
-        AND p."reglaId" = ${reglaId}
+        -- 🔷 (a) de qué TRAMA son los candidatos
+        AND p."tramaId" = ${tramaId}
         AND p.activo
         -- ↓↓↓ ESCALÓN, fijado por el ANCHO PEDIDO (no por la orientación):
         -- el rollo tiene que ser del PRIMER ancho >= al ancho que pidió el
@@ -347,7 +410,10 @@ async function reservarItem(
         AND p."anchoCm" = (
               SELECT MIN(p2."anchoCm") FROM "Pliego" p2
               WHERE p2.shop = ${shop}
-                AND p2."reglaId" = ${reglaId}
+                -- 🔷 (b) LA ESCALERA se calcula SOLO con los rollos de ESTA
+                -- trama. Sin esta línea el escalón saldría de mezclar todas las
+                -- tramas del producto. Ver el comentario de la cabecera.
+                AND p2."tramaId" = ${tramaId}
                 AND p2.activo
                 AND p2."anchoCm" >= ${anchoCm}::int
             )
@@ -375,7 +441,9 @@ async function reservarItem(
       INSERT INTO "ReservaPliego"
         ("id", "shop", "pliegoId", "reglaId", "refId", "largoCm",
          "anchoPedidoCm", "altoPedidoCm", "rotada", "estado", "createdAt")
-      SELECT gen_random_uuid()::text, ${shop}, c."pliegoId", ${reglaId}, ${refId},
+      -- reglaId sale del propio pliego: ReservaPliego lo sigue guardando (es lo
+      -- que usa reconciliar()), pero ya no es un parámetro de la reserva.
+      SELECT gen_random_uuid()::text, ${shop}, c."pliegoId", c."reglaId", ${refId},
              c.largo, ${anchoCm}::int, ${altoCm}::int, c.rotada, 'pendiente', NOW()
       FROM cand c
       ON CONFLICT ("refId") DO NOTHING
@@ -443,33 +511,33 @@ async function reservarItem(
  */
 export async function reservar(
   shop: string,
-  reglaId: string,
+  tramaId: string,
   items: ItemReserva[],
 ): Promise<ResultadoReserva> {
   const hechas: ReservaAsignada[] = [];
 
   // La escalera de anchos es la misma para todo el lote: se lee una vez y sirve
-  // para los logs de diagnóstico de cada item.
-  const caps0 = await capacidades(shop, reglaId);
+  // para los logs de diagnóstico de cada item. 🔷 Es la escalera de ESTA trama.
+  const caps0 = await capacidades(shop, tramaId);
 
   for (const item of items) {
     // El escalón se anuncia ANTES de intentar la reserva: es la decisión que
     // explica todo lo que venga después, y lo primero que hay que mirar cuando
     // alguien reporta "esta medida debería/no debería venderse".
     const v = evaluar(item.anchoCm, item.altoCm, caps0);
-    log(`reserva refId=${item.refId} regla=${reglaId} pedido=${item.anchoCm}x${item.altoCm}`);
+    log(`reserva refId=${item.refId} trama=${tramaId} pedido=${item.anchoCm}x${item.altoCm}`);
     log(
       `  escalón del ancho pedido ${item.anchoCm} → rollo ${v.escalonCm ?? "—"} cm`,
-      `(largo disponible ${v.largoMaxCm}) · escalera=${JSON.stringify(caps0)}`,
+      `(largo disponible ${v.largoMaxCm}) · escalera de la trama=${JSON.stringify(caps0)}`,
     );
     log(`  veredicto: ${v.permite ? "PERMITE" : "BLOQUEA"} — ${v.motivo}`);
 
-    const asignada = await reservarItem(shop, reglaId, item);
+    const asignada = await reservarItem(shop, tramaId, item);
 
     if (!asignada) {
-      const caps = await capacidades(shop, reglaId);
+      const caps = await capacidades(shop, tramaId);
       log(
-        `  SIN_STOCK pedido=${item.anchoCm}x${item.altoCm}`,
+        `  SIN_STOCK pedido=${item.anchoCm}x${item.altoCm} trama=${tramaId}`,
         `escalón=${v.escalonCm ?? "—"} motivo="${v.motivo}"`,
         `capacidades=${JSON.stringify(caps)}`,
       );
@@ -751,7 +819,7 @@ export type MovimientoFila = {
 };
 
 /** Estado de todos los pliegos de una trama, con la disponibilidad real. */
-export async function estadoPliegos(shop: string, reglaId: string): Promise<PliegoEstado[]> {
+export async function estadoPliegos(shop: string, tramaId: string): Promise<PliegoEstado[]> {
   const sql = db();
   const filas = await sql`
     SELECT p.id, p.codigo, p."anchoCm", p."largoTotalCm", p."largoRestanteCm", p.activo,
@@ -766,7 +834,7 @@ export async function estadoPliegos(shop: string, reglaId: string): Promise<Plie
                AND r."createdAt" > NOW() - make_interval(mins => ${RESERVA_TTL_MIN}::int)
            ), 0)::int AS "reservasVigentes"
     FROM "Pliego" p
-    WHERE p.shop = ${shop} AND p."reglaId" = ${reglaId}
+    WHERE p.shop = ${shop} AND p."tramaId" = ${tramaId}
     ORDER BY p.codigo
   `;
   return filas.map((f: any) => ({
@@ -784,14 +852,201 @@ export async function estadoPliegos(shop: string, reglaId: string): Promise<Plie
 // ── Integración con el checkout (Fase 4) ────────────────────────────────────
 
 /** ¿Esta trama tiene pliegos cargados? Si no, el control de stock NO la afecta. */
-export async function tienePliegos(shop: string, reglaId: string): Promise<boolean> {
+export async function tienePliegos(shop: string, tramaId: string): Promise<boolean> {
   const sql = db();
   const filas = await sql`
     SELECT 1 FROM "Pliego"
-    WHERE shop = ${shop} AND "reglaId" = ${reglaId} AND activo
+    WHERE shop = ${shop} AND "tramaId" = ${tramaId} AND activo
     LIMIT 1
   `;
   return filas.length > 0;
+}
+
+// ── Tramas (§4.4) ───────────────────────────────────────────────────────────
+
+export type TramaFila = {
+  id: string;
+  reglaId: string;
+  nombre: string;
+  url: string;
+  orden: number;
+  precioPorM2: number;
+  activa: boolean;
+  /** Rollos activos. 0 = la trama no tiene control de stock. */
+  rollos: number;
+};
+
+/**
+ * Tramas de una regla, con el conteo de rollos activos.
+ *
+ * El conteo es lo que usa el formulario de la regla para decidir si un slot se
+ * puede vaciar: una trama con rollos NO se borra, se da de baja (§4.4).
+ */
+export async function tramasDeRegla(
+  shop: string,
+  reglaId: string,
+  incluirInactivas = false,
+): Promise<TramaFila[]> {
+  const sql = db();
+  const filas = await sql`
+    SELECT t."id", t."reglaId", t."nombre", t."url", t."orden", t."precioPorM2", t."activa",
+           COALESCE((
+             SELECT COUNT(*) FROM "Pliego" p WHERE p."tramaId" = t."id" AND p.activo
+           ), 0)::int AS rollos
+    FROM "Trama" t
+    WHERE t.shop = ${shop} AND t."reglaId" = ${reglaId}
+      AND (${incluirInactivas}::boolean OR t."activa")
+    ORDER BY t."orden", t."nombre"
+  `;
+  return filas.map(mapTrama);
+}
+
+/** Una trama por id, con su regla. `null` si no existe o es de otra tienda. */
+export async function tramaPorId(
+  shop: string,
+  tramaId: string,
+): Promise<(TramaFila & { reglaNombre: string; maxAncho: number; maxAlto: number; minAncho: number; minAlto: number }) | null> {
+  const sql = db();
+  const filas = await sql`
+    SELECT t."id", t."reglaId", t."nombre", t."url", t."orden", t."precioPorM2", t."activa",
+           r."nombre" AS "reglaNombre", r."minAncho", r."maxAncho", r."minAlto", r."maxAlto",
+           COALESCE((
+             SELECT COUNT(*) FROM "Pliego" p WHERE p."tramaId" = t."id" AND p.activo
+           ), 0)::int AS rollos
+    FROM "Trama" t
+    JOIN "ReglaPersonalizada" r ON r."id" = t."reglaId"
+    WHERE t."id" = ${tramaId} AND t.shop = ${shop}
+    LIMIT 1
+  `;
+  if (!filas.length) return null;
+  const f: any = filas[0];
+  return {
+    ...mapTrama(f),
+    reglaNombre: String(f.reglaNombre),
+    minAncho: Number(f.minAncho),
+    maxAncho: Number(f.maxAncho),
+    minAlto: Number(f.minAlto),
+    maxAlto: Number(f.maxAlto),
+  };
+}
+
+/** Todas las tramas de la tienda con su regla — para el índice del admin. */
+export async function todasLasTramas(
+  shop: string,
+): Promise<Array<TramaFila & { reglaNombre: string; reglaActiva: boolean }>> {
+  const sql = db();
+  const filas = await sql`
+    SELECT t."id", t."reglaId", t."nombre", t."url", t."orden", t."precioPorM2", t."activa",
+           r."nombre" AS "reglaNombre", r."activa" AS "reglaActiva",
+           COALESCE((
+             SELECT COUNT(*) FROM "Pliego" p WHERE p."tramaId" = t."id" AND p.activo
+           ), 0)::int AS rollos
+    FROM "Trama" t
+    JOIN "ReglaPersonalizada" r ON r."id" = t."reglaId"
+    WHERE t.shop = ${shop}
+    ORDER BY r."nombre", t."orden", t."nombre"
+  `;
+  return filas.map((f: any) => ({
+    ...mapTrama(f),
+    reglaNombre: String(f.reglaNombre),
+    reglaActiva: Boolean(f.reglaActiva),
+  }));
+}
+
+function mapTrama(f: any): TramaFila {
+  return {
+    id: String(f.id),
+    reglaId: String(f.reglaId),
+    nombre: String(f.nombre),
+    url: String(f.url ?? ""),
+    orden: Number(f.orden),
+    precioPorM2: Number(f.precioPorM2),
+    activa: Boolean(f.activa),
+    rollos: Number(f.rollos ?? 0),
+  };
+}
+
+/**
+ * Guarda los slots de tramas de una regla (el formulario de 4 slots).
+ *
+ * Reglas de la operación, todas por el §4.4:
+ *  - Slot con `id` → UPDATE (renombrar es seguro: la identidad es el id).
+ *  - Slot sin `id` → INSERT, o REACTIVACIÓN si ya existía una trama con ese
+ *    nombre dada de baja (el `@@unique(reglaId, nombre)` lo impediría si no).
+ *  - Trama que ya no aparece en los slots:
+ *      · sin rollos  → baja lógica (`activa = false`). NUNCA se borra (§4.3).
+ *      · con rollos  → se RECHAZA la operación entera y se explica cuál.
+ */
+export async function guardarTramas(
+  shop: string,
+  reglaId: string,
+  slots: Array<{ id?: string | null; nombre: string; url: string; precioPorM2: number }>,
+): Promise<{ ok: true; creadas: number; actualizadas: number; dadasDeBaja: number } | { ok: false; error: string }> {
+  const sql = db();
+
+  const limpios = slots
+    .map((s, i) => ({
+      id: s.id?.trim() || null,
+      nombre: String(s.nombre ?? "").trim(),
+      url: String(s.url ?? "").trim(),
+      precioPorM2: Number.isFinite(s.precioPorM2) ? Math.max(0, s.precioPorM2) : 0,
+      orden: i,
+    }))
+    .filter((s) => s.nombre !== "");
+
+  const nombres = limpios.map((s) => s.nombre.toLowerCase());
+  const dup = nombres.find((n, i) => nombres.indexOf(n) !== i);
+  if (dup) return { ok: false, error: `Hay dos tramas con el mismo nombre ("${dup}"). Los nombres deben ser distintos.` };
+
+  const existentes = await tramasDeRegla(shop, reglaId, true);
+  const conservados = new Set(limpios.map((s) => s.id).filter(Boolean) as string[]);
+
+  // Las que desaparecen del formulario: baja lógica si están vacías, error si no.
+  const aBaja = existentes.filter((t) => t.activa && !conservados.has(t.id) &&
+    !limpios.some((s) => !s.id && s.nombre.toLowerCase() === t.nombre.toLowerCase()));
+
+  const conRollos = aBaja.filter((t) => t.rollos > 0);
+  if (conRollos.length) {
+    return {
+      ok: false,
+      error: `No se puede quitar ${conRollos.length === 1 ? "la trama" : "las tramas"} ` +
+        conRollos.map((t) => `"${t.nombre}" (${t.rollos} rollo${t.rollos === 1 ? "" : "s"})`).join(", ") +
+        `: tiene stock cargado. Da de baja sus rollos en Stock de pliegos, o deja la trama y desactívala desde ahí.`,
+    };
+  }
+
+  let creadas = 0, actualizadas = 0;
+
+  for (const s of limpios) {
+    if (s.id) {
+      await sql`
+        UPDATE "Trama"
+        SET "nombre" = ${s.nombre}, "url" = ${s.url}, "precioPorM2" = ${s.precioPorM2}::double precision,
+            "orden" = ${s.orden}::int, "activa" = true
+        WHERE "id" = ${s.id} AND shop = ${shop} AND "reglaId" = ${reglaId}
+      `;
+      actualizadas++;
+      continue;
+    }
+    // Sin id: alta, o reactivación si el nombre ya existía dado de baja.
+    const r = await sql`
+      INSERT INTO "Trama" ("id", "shop", "reglaId", "nombre", "url", "orden", "precioPorM2", "activa", "createdAt")
+      VALUES (gen_random_uuid()::text, ${shop}, ${reglaId}, ${s.nombre}, ${s.url},
+              ${s.orden}::int, ${s.precioPorM2}::double precision, true, NOW())
+      ON CONFLICT ("reglaId", "nombre") DO UPDATE
+        SET "url" = EXCLUDED."url", "precioPorM2" = EXCLUDED."precioPorM2",
+            "orden" = EXCLUDED."orden", "activa" = true
+      RETURNING (xmax = 0) AS insertada
+    `;
+    if ((r[0] as any)?.insertada) creadas++; else actualizadas++;
+  }
+
+  for (const t of aBaja) {
+    await sql`UPDATE "Trama" SET "activa" = false WHERE "id" = ${t.id} AND shop = ${shop}`;
+  }
+
+  log(`tramas regla=${reglaId}: ${creadas} alta(s), ${actualizadas} actualizada(s), ${aBaja.length} baja(s)`);
+  return { ok: true, creadas, actualizadas, dadasDeBaja: aBaja.length };
 }
 
 /**
@@ -876,10 +1131,75 @@ export type ItemMedidaCheckout = {
   /** id del item de localStorage. Lo mandará el tema en la Fase 7. */
   refId: string | null;
   reglaId: string | null;
+  /** 🔷 id de la `Trama` elegida. Lo manda el tema desde el cambio del §4.4. */
+  tramaId: string | null;
+  /** Nombre de la trama. Red para los items legacy del localStorage, que
+   *  guardan el nombre pero todavía no el id. */
+  trama: string | null;
   variantId: string | number | null;
   anchoCm: number;
   altoCm: number;
 };
+
+/**
+ * Resuelve la TRAMA de cada item, ya conocida su regla.
+ *
+ * Misma cascada de 3 niveles que `resolverReglas()`, por la misma razón (los
+ * items que ya están en el localStorage de los clientes no traen `tramaId`):
+ *   1. `item.tramaId` — lo manda el tema desde el §4.4.
+ *   2. `item.trama` (el nombre) → la trama activa de esa regla con ese nombre.
+ *   3. la regla tiene UNA SOLA trama activa → ésa (el widget la auto-selecciona,
+ *      así que el item legacy no podía ser de otra).
+ * Si no se resuelve, el item pasa SIN reserva y queda en el log.
+ */
+async function resolverTramas(
+  shop: string,
+  items: ItemMedidaCheckout[],
+  reglas: Map<number, string>,
+): Promise<Map<number, string>> {
+  const resuelto = new Map<number, string>();
+  const reglaIds = [...new Set([...reglas.values()])];
+  if (!reglaIds.length) return resuelto;
+
+  const sql = db();
+  const filas = await sql`
+    SELECT "id", "reglaId", "nombre" FROM "Trama"
+    WHERE shop = ${shop} AND "reglaId" = ANY(${reglaIds}) AND "activa"
+  `;
+  const porRegla = new Map<string, Array<{ id: string; nombre: string }>>();
+  for (const f of filas as any[]) {
+    const k = String(f.reglaId);
+    porRegla.set(k, [...(porRegla.get(k) ?? []), { id: String(f.id), nombre: String(f.nombre) }]);
+  }
+  const idsValidos = new Set((filas as any[]).map((f) => String(f.id)));
+
+  for (const item of items) {
+    const reglaId = reglas.get(item.indice);
+    if (!reglaId) continue;
+    const deLaRegla = porRegla.get(reglaId) ?? [];
+
+    if (item.tramaId && idsValidos.has(item.tramaId)) {
+      resuelto.set(item.indice, item.tramaId);
+      continue;
+    }
+    if (item.trama) {
+      const porNombre = deLaRegla.find(
+        (t) => t.nombre.trim().toLowerCase() === String(item.trama).trim().toLowerCase(),
+      );
+      if (porNombre) {
+        log(`  item ${item.indice}: trama resuelta por nombre "${item.trama}" → ${porNombre.id} (item legacy)`);
+        resuelto.set(item.indice, porNombre.id);
+        continue;
+      }
+    }
+    if (deLaRegla.length === 1) {
+      log(`  item ${item.indice}: la regla tiene una sola trama → ${deLaRegla[0].nombre}`);
+      resuelto.set(item.indice, deLaRegla[0].id);
+    }
+  }
+
+  return resuelto;
+}
 
 export type AsignacionCheckout = { indice: number; reserva: ReservaAsignada };
 
@@ -920,33 +1240,45 @@ export async function procesarCheckoutPliegos(
   if (!items.length) return vacio;
 
   const reglas = await resolverReglas(shop, items, accessToken);
+  // 🔷 §4.4 — el stock es por trama, así que hay que resolver DOS cosas: la
+  // regla (para saber qué tramas existen) y después la trama concreta.
+  const tramas = await resolverTramas(shop, items, reglas);
 
-  // Agrupar por trama: la reconciliación y la reserva son por trama.
-  const porRegla = new Map<string, ItemMedidaCheckout[]>();
+  // Agrupar por TRAMA: la reserva es por trama.
+  const porTrama = new Map<string, ItemMedidaCheckout[]>();
   for (const item of items) {
     const reglaId = reglas.get(item.indice);
     if (!reglaId) {
       log(`item legacy sin reglaId (indice=${item.indice}, ${item.anchoCm}x${item.altoCm}) — sin reserva`);
       continue;
     }
-    porRegla.set(reglaId, [...(porRegla.get(reglaId) ?? []), item]);
+    const tramaId = tramas.get(item.indice);
+    if (!tramaId) {
+      log(`item sin trama resoluble (indice=${item.indice}, ${item.anchoCm}x${item.altoCm}, trama="${item.trama ?? ""}") — sin reserva`);
+      continue;
+    }
+    porTrama.set(tramaId, [...(porTrama.get(tramaId) ?? []), item]);
   }
-  if (!porRegla.size) return vacio;
+  if (!porTrama.size) return vacio;
+
+  // §3.2.2 — el único que puede sobrevender es el siguiente comprador, y es
+  // precisamente él quien dispara la reconciliación. Sigue siendo POR REGLA
+  // (`ReservaPliego.reglaId`), así que se hace una vez por regla distinta y no
+  // una por trama: dos tramas del mismo producto compartirían el trabajo.
+  for (const reglaId of new Set(reglas.values())) {
+    const rec = await reconciliar(shop, reglaId);
+    if (rec.revisadas) {
+      log(`reconciliación regla=${reglaId}: ${rec.confirmadas} confirmadas, ${rec.anuladas} anuladas, ${rec.sinResolver} sin resolver`);
+    }
+  }
 
   const asignaciones: AsignacionCheckout[] = [];
   const refIds: string[] = [];
 
-  for (const [reglaId, grupo] of porRegla) {
-    if (!(await tienePliegos(shop, reglaId))) {
-      log(`trama ${reglaId} sin pliegos cargados — sin control de stock`);
+  for (const [tramaId, grupo] of porTrama) {
+    if (!(await tienePliegos(shop, tramaId))) {
+      log(`trama ${tramaId} sin pliegos cargados — sin control de stock`);
       continue;
-    }
-
-    // §3.2.2 — el único que puede sobrevender es el siguiente comprador, y es
-    // precisamente él quien dispara la reconciliación.
-    const rec = await reconciliar(shop, reglaId);
-    if (rec.revisadas) {
-      log(`reconciliación regla=${reglaId}: ${rec.confirmadas} confirmadas, ${rec.anuladas} anuladas, ${rec.sinResolver} sin resolver`);
     }
 
     const paraReservar: ItemReserva[] = grupo.map((i) => {
@@ -958,7 +1290,7 @@ export async function procesarCheckoutPliegos(
       return { refId, anchoCm: i.anchoCm, altoCm: i.altoCm };
     });
 
-    const res = await reservar(shop, reglaId, paraReservar);
+    const res = await reservar(shop, tramaId, paraReservar);
 
     if (res.ok) {
       res.reservas.forEach((reserva, k) => {
@@ -970,12 +1302,12 @@ export async function procesarCheckoutPliegos(
 
     // SIN_STOCK
     if (modo === "log") {
-      log(`SIN_STOCK (MODO=log, la venta NO se bloqueó) pedido=${res.anchoCm}x${res.altoCm} regla=${reglaId}`);
+      log(`SIN_STOCK (MODO=log, la venta NO se bloqueó) pedido=${res.anchoCm}x${res.altoCm} trama=${tramaId}`);
       continue;
     }
 
     // modo === 'bloqueo': compensar TODO lo reservado en esta petición.
-    log(`SIN_STOCK (MODO=bloqueo, se rechaza la venta) pedido=${res.anchoCm}x${res.altoCm} regla=${reglaId}`);
+    log(`SIN_STOCK (MODO=bloqueo, se rechaza la venta) pedido=${res.anchoCm}x${res.altoCm} trama=${tramaId}`);
     if (refIds.length) await anular(shop, refIds);
     return {
       modo,
@@ -1020,27 +1352,32 @@ export type ResultadoAlta = { creados: string[]; omitidos: number };
  */
 export async function altaMasiva(
   shop: string,
-  reglaId: string,
+  tramaId: string,
   params: { prefijo: string; anchoCm: number; largoCm: number; cantidad: number; nota: string },
 ): Promise<ResultadoAlta> {
   const { prefijo, anchoCm, largoCm, cantidad, nota } = params;
   const sql = db();
 
+  // `reglaId` sale de la trama: el pliego lo sigue guardando (denormalización
+  // para las vistas por regla), pero el dueño del stock es la trama.
   const creados = await sql`
-    WITH base AS (
+    WITH t AS (
+      SELECT "id", "reglaId" FROM "Trama" WHERE "id" = ${tramaId} AND shop = ${shop}
+    ),
+    base AS (
       SELECT COALESCE(MAX(SUBSTRING(codigo FROM '([0-9]+)$')::int), 0) AS ultimo
       FROM "Pliego"
       WHERE shop = ${shop}
-        AND "reglaId" = ${reglaId}
+        AND "tramaId" = ${tramaId}
         AND codigo LIKE ${prefijo + "-" + anchoCm + "-"} || '%'
     )
     INSERT INTO "Pliego"
-      ("id", "shop", "reglaId", "codigo", "anchoCm", "largoTotalCm", "largoRestanteCm",
+      ("id", "shop", "reglaId", "tramaId", "codigo", "anchoCm", "largoTotalCm", "largoRestanteCm",
        "activo", "nota", "createdAt")
-    SELECT gen_random_uuid()::text, ${shop}, ${reglaId},
+    SELECT gen_random_uuid()::text, ${shop}, t."reglaId", t."id",
            ${prefijo + "-" + anchoCm + "-"} || LPAD((base.ultimo + g)::text, 2, '0'),
            ${anchoCm}::int, ${largoCm}::int, ${largoCm}::int, true, ${nota}, NOW()
-    FROM base, generate_series(1, ${cantidad}::int) AS g
+    FROM t, base, generate_series(1, ${cantidad}::int) AS g
     ON CONFLICT ("shop", "codigo") DO NOTHING
     RETURNING "codigo"
   `;
@@ -1053,12 +1390,12 @@ export async function altaMasiva(
              ${nota || "Alta masiva desde el admin"}, NOW()
       FROM "Pliego" p
       WHERE p.shop = ${shop}
-        AND p."reglaId" = ${reglaId}
+        AND p."tramaId" = ${tramaId}
         AND p.codigo = ANY(${creados.map((c: any) => String(c.codigo))})
     `;
   }
 
-  log(`alta masiva regla=${reglaId}: ${creados.length}/${cantidad} rollos ${anchoCm}x${largoCm}`);
+  log(`alta masiva trama=${tramaId}: ${creados.length}/${cantidad} rollos ${anchoCm}x${largoCm}`);
   return {
     creados: creados.map((c: any) => String(c.codigo)),
     omitidos: cantidad - creados.length,
@@ -1141,8 +1478,54 @@ export async function cambiarActivo(
   return true;
 }
 
+/**
+ * RESTAURAR: devuelve el rollo a 0% consumido (`largoRestanteCm = largoTotalCm`).
+ *
+ * Es la herramienta para resetear el stock después de una tanda de QA, sin tener
+ * que dar de baja el rollo y volver a darlo de alta (lo que cambiaría su código
+ * y rompería la trazabilidad de los cortes que ya lo referencian).
+ *
+ * Deja `MovimientoPliego` con motivo 'restauracion' y el delta recuperado, igual
+ * que hace `ajustarPliego()`. La nota es obligatoria, por la misma razón (§7.3).
+ *
+ * ⚠️ NO toca las reservas. Una reserva 'pendiente' vigente sigue ocupando su
+ * largo hasta que venza o se anule; una 'confirmada' ya no ocupa nada, así que
+ * el rollo queda efectivamente lleno. Es deliberado: restaurar es una corrección
+ * de inventario, no una anulación de ventas.
+ */
+export async function restaurarPliego(
+  shop: string,
+  pliegoId: string,
+  nota: string,
+): Promise<{ ok: true; delta: number; codigo: string; largoTotalCm: number } | { ok: false; error: string }> {
+  const sql = db();
+
+  const filas = await sql`
+    SELECT "codigo", "largoTotalCm", "largoRestanteCm"
+    FROM "Pliego" WHERE id = ${pliegoId} AND shop = ${shop} LIMIT 1
+  `;
+  if (!filas.length) return { ok: false, error: "El pliego no existe." };
+
+  const p: any = filas[0];
+  const total = Number(p.largoTotalCm);
+  const delta = total - Number(p.largoRestanteCm);
+  if (delta === 0) return { ok: false, error: `${p.codigo} ya está al 100%: no hay nada que restaurar.` };
+
+  await sql`
+    UPDATE "Pliego" SET "largoRestanteCm" = "largoTotalCm"
+    WHERE id = ${pliegoId} AND shop = ${shop}
+  `;
+  await sql`
+    INSERT INTO "MovimientoPliego" ("id", "shop", "pliegoId", "largoCm", "motivo", "nota", "createdAt")
+    VALUES (gen_random_uuid()::text, ${shop}, ${pliegoId}, ${delta}::int, 'restauracion', ${nota}, NOW())
+  `;
+
+  log(`restaurado ${p.codigo}: ${p.largoRestanteCm} → ${total} (+${delta}) — ${nota}`);
+  return { ok: true, delta, codigo: String(p.codigo), largoTotalCm: total };
+}
+
 /** Reservas de una trama: vigentes primero, luego vencidas sin resolver. */
-export async function reservasDeTrama(shop: string, reglaId: string): Promise<ReservaFila[]> {
+export async function reservasDeTrama(shop: string, tramaId: string): Promise<ReservaFila[]> {
   const sql = db();
   const filas = await sql`
     SELECT r."id", r."refId", r."largoCm", r."anchoPedidoCm", r."altoPedidoCm",
@@ -1152,7 +1535,9 @@ export async function reservasDeTrama(shop: string, reglaId: string): Promise<Re
             AND r."createdAt" <= NOW() - make_interval(mins => ${RESERVA_TTL_MIN}::int)) AS vencida
     FROM "ReservaPliego" r
     JOIN "Pliego" p ON p.id = r."pliegoId"
-    WHERE r.shop = ${shop} AND r."reglaId" = ${reglaId}
+    -- 🔷 La reserva guarda reglaId, no tramaId: la trama se deriva del pliego,
+    -- que es exacto y evitó tener que migrar las reservas existentes (§4.4).
+    WHERE r.shop = ${shop} AND p."tramaId" = ${tramaId}
     ORDER BY r."createdAt" DESC
     LIMIT 200
   `;
@@ -1176,14 +1561,14 @@ export async function reservasDeTrama(shop: string, reglaId: string): Promise<Re
  * LA PANTALLA DEL TALLER (decisión 5). Como el código de pliego no viaja en la
  * orden de Shopify, éste es el único sitio donde se cruza orden ↔ pliego.
  */
-export async function cortesDeTrama(shop: string, reglaId: string): Promise<CorteFila[]> {
+export async function cortesDeTrama(shop: string, tramaId: string): Promise<CorteFila[]> {
   const sql = db();
   const filas = await sql`
     SELECT pc."id", pc."orderId", pc."orderName", pc."pliegoCodigo",
            pc."ancho", pc."alto", pc."rotada", pc."productTitle", pc."estado", pc."createdAt"
     FROM "PedidoCustom" pc
     JOIN "Pliego" p ON p.id = pc."pliegoId"
-    WHERE pc.shop = ${shop} AND p."reglaId" = ${reglaId}
+    WHERE pc.shop = ${shop} AND p."tramaId" = ${tramaId}
     ORDER BY pc."createdAt" DESC
     LIMIT 200
   `;
@@ -1202,13 +1587,13 @@ export async function cortesDeTrama(shop: string, reglaId: string): Promise<Cort
 }
 
 /** Historial de altas y ajustes de una trama. */
-export async function movimientosDeTrama(shop: string, reglaId: string): Promise<MovimientoFila[]> {
+export async function movimientosDeTrama(shop: string, tramaId: string): Promise<MovimientoFila[]> {
   const sql = db();
   const filas = await sql`
     SELECT m."id", m."largoCm", m."motivo", m."nota", m."createdAt", p."codigo"
     FROM "MovimientoPliego" m
     JOIN "Pliego" p ON p.id = m."pliegoId"
-    WHERE m.shop = ${shop} AND p."reglaId" = ${reglaId}
+    WHERE m.shop = ${shop} AND p."tramaId" = ${tramaId}
     ORDER BY m."createdAt" DESC
     LIMIT 100
   `;

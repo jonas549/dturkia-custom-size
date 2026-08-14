@@ -2,7 +2,7 @@
 
 **Proyecto:** dturkia-custom-size (D'Turkia · `dturkia.myshopify.com`)
 **Iniciada:** 2026-08-12
-**Estado:** ✅ **Fases 1-7 COMPLETADAS** + **cambio a escalones por ancho de rollo ([§5.0](#50-escalones-por-ancho-de-rollo))** — falta pegar los 2 archivos del tema y activar `PLIEGOS_MODO`. Siguiente: Fase 8 (activación + QA)
+**Estado:** ✅ **Fases 1-7 COMPLETADAS** + **cambio a escalones por ancho de rollo ([§5.0](#50-escalones-por-ancho-de-rollo))** + 🔷 **EL STOCK PASA A SER POR TRAMA ([§4.4](#44--el-stock-es-por-trama-no-por-regla-2026-08-14))** — falta pegar los 2 archivos del tema y activar `PLIEGOS_MODO`. Siguiente: Fase 8 (activación + QA)
 **Última actualización:** 2026-08-14
 
 > ### ⚠️ LEER ANTES DE TOCAR NADA — sobre "Ceniza"
@@ -39,6 +39,7 @@
 2. [Diagnóstico y análisis de factibilidad](#2-diagnóstico-y-análisis-de-factibilidad)
 3. [Decisiones cerradas](#3-decisiones-cerradas)
 4. [Modelo de datos](#4-modelo-de-datos)
+   · [4.4 El stock es por trama, no por regla](#44--el-stock-es-por-trama-no-por-regla-2026-08-14) 🔷
 5. [Lógica de selección y reserva](#5-lógica-de-selección-y-reserva)
    · [5.0 Escalones por ancho de rollo](#50-escalones-por-ancho-de-rollo) 🔶
 6. [Plan de ataque — Fases 1 a 8](#6-plan-de-ataque--fases-1-a-8)
@@ -361,6 +362,182 @@ orderName    String  @default("")   // "#D1042" — para cruzar orden ↔ pliego
   disponibilidad del §5.4 (la `SUM` dejaría de contarla y el pliego parecería más libre de lo que está).
 - **`CHECK ("largoRestanteCm" >= 0)`** como red de seguridad final a nivel DB.
 - Migración **aditiva pura**, sin backfill: no toca ningún dato existente.
+
+### 4.4 🔷 EL STOCK ES POR TRAMA, NO POR REGLA (2026-08-14)
+
+> **Cambio de modelo pedido por el cliente.** Hasta ahora `Pliego.reglaId` colgaba los rollos de la
+> **regla** (= el producto), así que todas las tramas de un producto compartían un pozo común de
+> material. **Ya no:** cada trama tiene su propio inventario de rollos, y la validación y la reserva
+> se hacen contra los rollos de **la trama que el cliente eligió**.
+>
+> Donde este documento diga "trama" refiriéndose a la `ReglaPersonalizada` entera (§1.1, §5.0, los
+> logs, los nombres de función `reservasDeTrama`/`cortesDeTrama`/`movimientosDeTrama`), **léase
+> "regla"**. A partir de aquí *trama* significa el modelo `Trama`.
+
+#### Qué NO cambia
+
+**La lógica de negocio del §5 es exactamente la misma.** `escalonPara()`, `escalones()`,
+`evaluar()`, `factible()` y `hayMaterial()` son **funciones puras sobre `Capacidad[]` y no se
+tocaron ni una línea**. Escalones, rotación dentro del escalón, asimetría del §5.0.1, reservas de
+15 min, expiración por demanda, `FOR UPDATE OF p SKIP LOCKED` e idempotencia por `refId`: idénticos.
+**Lo único que cambia es de dónde sale el `Capacidad[]`**: antes de los rollos de la regla, ahora de
+los rollos de la trama.
+
+#### Las tramas pasan a ser un modelo real
+
+Hasta hoy las tramas eran entradas de `ReglaPersonalizada.tramas Json` (hasta 4 slots
+`{url, nombre}`), **sin identidad propia**. Eso no permite colgarles rollos. Se evaluaron tres
+opciones y se eligió la tabla:
+
+| Opción | Por qué se descartó |
+|---|---|
+| Por **índice** del slot (`Pliego.tramaIndice`) | El formulario reescribe el array entero al guardar. Si el merchant vacía el slot 2, todo se corre y los rollos apuntan a otra trama **en silencio**. |
+| Por **nombre** (`Pliego.tramaNombre`) | **Un renombre no se puede detectar.** Como el array se reemplaza entero y las posiciones no son estables, renombrar "Ceniza"→"Alba" y "Alba"→"Ceniza" a la vez es indistinguible de no hacer nada, y los rollos cambian de dueño sin aviso. |
+| **Clave estable dentro del Json** (`{id, url, nombre}`) | Resuelve el renombre y era ~2 h más barata, pero **no da integridad referencial**: nada impide borrar el slot de una trama con 11 rollos colgando. |
+| ✅ **Tabla `Trama`** | Da identidad estable + `onDelete: Restrict` + baja lógica. Es la misma decisión que ya se tomó para `Pliego` en el §4.3, por la misma razón. |
+
+```prisma
+model Trama {
+  id          String   @id @default(cuid())
+  shop        String
+  reglaId     String
+  regla       ReglaPersonalizada @relation(fields: [reglaId], references: [id], onDelete: Restrict)
+  nombre      String
+  url         String   @default("")
+  orden       Int      @default(0)
+  /// Precio por m² PROPIO de la trama. Sustituye a ReglaPersonalizada.precioPorM2
+  /// como fuente del precio. Las FÓRMULAS no cambian, solo de dónde sale el factor.
+  precioPorM2 Float    @default(0)
+  activa      Boolean  @default(true)   // baja lógica — nunca DELETE
+  createdAt   DateTime @default(now())
+  pliegos     Pliego[]
+
+  @@unique([reglaId, nombre])
+}
+```
+
+Y en `Pliego`: **`tramaId String` NOT NULL** con FK `Restrict`, más el índice del selector
+`@@index([shop, tramaId, activo, anchoCm])`.
+
+- **`Pliego.reglaId` se conserva.** Es redundante vía `Trama`, pero quitarlo obliga a reescribir
+  consultas y FKs sin ganar nada. Queda como denormalización para las vistas por regla.
+- **`ReglaPersonalizada.tramas Json` NO se borra.** Queda como columna muerta sin lectores durante
+  un release, para que el rollback sea "revertir el código" sin tocar datos. Se limpia después.
+- **`prefijoSugerido()` pasa a recibir el nombre de la TRAMA**, no el de la regla: "Ceniza" → `CEN`.
+  Los códigos `CEN-*` que ya existían quedan retroactivamente coherentes.
+
+#### El invariante: no hay pliegos sin trama
+
+`Pliego.tramaId` es **NOT NULL**. De ahí salen tres casos limpios, y el tercero es el que garantiza
+que nada de lo que ya existe se rompe:
+
+| Caso | Comportamiento |
+|---|---|
+| Regla **sin tramas** | No hay tramas → no puede haber pliegos → `capacidades` ausente → **el widget funciona como siempre, sin control de stock.** Es la guarda `tienePliegos()` que ya existía |
+| Regla con **1 trama** | Se **auto-selecciona** al cargar; el cliente no ve un paso extra |
+| Regla con **N tramas** | Cada una con su inventario y su precio |
+
+> **Se descartó** hacer `tramaId` nullable con el significado "pozo común de la regla". Sonaría
+> compatible, pero mete un `OR "tramaId" IS NULL` en la sentencia atómica y crea dos caminos de
+> código en la única consulta delicada del sistema.
+
+#### ⚠️ El riesgo #1: hay DOS filtros de trama en la sentencia atómica
+
+En `reservarItem()` la trama aparece **dos veces**, y hacen cosas distintas:
+
+```sql
+WHERE p."tramaId" = ${tramaId}          -- 1. de qué trama son los candidatos
+  ...
+  AND p."anchoCm" = (
+        SELECT MIN(p2."anchoCm") FROM "Pliego" p2
+        WHERE p2."tramaId" = ${tramaId}  -- 2. sobre qué rollos se calcula LA ESCALERA
+      )
+```
+
+**Si solo se cambia el primero, la escalera se calcula sobre los rollos de todas las tramas** y un
+pedido de Ceniza podría asignarse usando el escalón que define un rollo de Alba. Fallo silencioso.
+Validado con un fixture de dos tramas de anchos distintos, corriendo el CTE en solo lectura — ver el
+apartado de validación del cambio.
+
+#### El precio pasa a ser por trama
+
+`Trama.precioPorM2` sustituye a `ReglaPersonalizada.precioPorM2` como **fuente** del factor.
+
+> ⛔ **Las fórmulas NO se tocaron**, y esto es lo único que hay que verificar al revisar el cambio:
+> `Math.round(Math.ceil(ancho/100) * Math.ceil(alto/100) * precioPorM2)` para la alfombra y
+> `Math.floor((ancho/100) * (alto/100) * waterproofPorM2)` para el impermeabilizador siguen
+> literalmente iguales en `calcular()` y en el handler de compra. Solo cambia **qué valor se le pasa
+> como `precioPorM2`**.
+
+`waterproofPorM2` **sigue siendo de la regla**: el impermeabilizador no depende del tejido.
+
+El checkout **no recalcula precios** (toma `precio` del item del carrito), así que este cambio no
+toca `api.checkout.tsx` ni `api.checkout-impermeabilizador.tsx` por el lado del precio.
+
+#### Migración de los 11 rollos existentes
+
+**Ninguna fila se borra ni se re-clavea.** `Pliego` conserva su `id`, su `codigo` y su
+`largoRestanteCm`; solo gana una columna. De ahí lo importante:
+
+> **`ReservaPliego`, `MovimientoPliego` y `PedidoCustom` no se tocan en absoluto.** Cuelgan de
+> `pliegoId`, y `pliegoId` no cambia. Las 6 reservas confirmadas y los 11 movimientos de alta quedan
+> exactamente como estaban, sin migrar una sola fila.
+
+Estado de partida verificado en la base antes de migrar: `Alfombra test 2` tenía **una sola trama
+completa en el Json, "Ceniza"** (+3 slots vacíos) y **11 pliegos, todos `CEN-*`**. La otra regla
+(`Alfombra Medida Personalizada (TEST)`) tenía `tramas: []` y **0 pliegos** — es el caso "regla sin
+tramas" en producción, y es el que prueba que nada se rompe.
+
+El paso 4 (asignar los 11 rollos a Ceniza) va **con los ids literales, a mano**, no con una
+heurística tipo "si la regla tiene una sola trama, asigna esa": funcionaría hoy y se rompería
+callado el día que haya dos. El paso 5 (`SET NOT NULL`) **falla ruidosamente** si quedó algún pliego
+sin asignar — es la verificación, no un trámite.
+
+**Reversible:** `DROP COLUMN "tramaId"` + `DROP TABLE "Trama"` y el código anterior vuelve a
+funcionar sobre datos intactos.
+
+#### Validación ejecutada (2026-08-14)
+
+**El fixture de dos tramas**, con las escaleras reales leídas de Neon y el CTE corrido **en solo
+lectura** (sin `INSERT`): **11/11 casos** correctos, `evaluar()` y el SQL coincidiendo en todos.
+
+Lo importante es que **3 de esos casos detectan el riesgo #1**: se corrió el CTE también con la
+versión defectuosa (sin filtro de trama en el `SELECT MIN`) y da un resultado distinto.
+
+| Caso | Correcto | Con el bug |
+|---|---|---|
+| **Ceniza 350×300** | PERMITE `CEN-400-01` | **BLOQUEA** — `MIN(>=350)` mezclado = 378, que es un rollo de *Alba* |
+| **Alba 90×300** | PERMITE `ALB-300-01` rotada | **BLOQUEA** — `MIN(>=90)` mezclado = 100, que es un rollo de *Ceniza* |
+| **Ceniza 320×228** | PERMITE `CEN-400-01` | **BLOQUEA** |
+
+**La misma medida da resultados distintos según la trama**, que es el objetivo del cambio:
+`250×200` bloquea en Ceniza (su escalón 300 tiene 70 cm) y **vende** en Alba (el suyo tiene 2070);
+`390×100` vende en Ceniza (escalón 400) y bloquea en Alba (su rollo más ancho es 382). 4 de 8
+medidas de control cambian de veredicto entre tramas.
+
+**Topes por trama**, calculados con la escalera de cada una: Ceniza `400 × 2100`, Alba
+**`382 × 2100`** — el tope de ancho de Alba sale de su rollo más ancho, no del de la regla.
+
+**El snippet coincide con el motor**: `evaluarMedida()` extraída del archivo real y corrida contra
+las dos escaleras da lo mismo que `evaluar()` en todos los casos.
+
+**Precios de control inalterados** con la fórmula intacta: 250×350 → 840.000 · 100×100 → 70.000 ·
+230×230 → 630.000. Son los mismos tres valores que se verificaron el 2026-08-13.
+
+**Guardas nuevas**, probadas sin escribir: restaurar un rollo ya lleno se rechaza · quitar del
+formulario una trama con rollos se rechaza nombrándola · dos slots con el mismo nombre se rechazan.
+
+`npm run build` ✅ · `npm run typecheck`: los **mismos 2 errores preexistentes**
+(`app._index.tsx`, `shopify.server.ts`), ninguno nuevo · `node --check` de los dos bloques del
+snippet y de `functions.js` ✅ · 0 reservas pendientes y 0 pliegos sin trama al terminar.
+
+#### `capacidades` de nivel superior en `/api/precio`: se mantiene, deprecado
+
+El tema **en vivo** (el de la Fase 6, que nunca se pegó) **sí valida medidas hoy** con la regla vieja
+agrupada — eso es independiente de `PLIEGOS_MODO`, que solo afecta al checkout. Si el campo
+desapareciera, la tienda dejaría de bloquear nada de golpe. Se mantiene tal cual, marcado como
+deprecado, y se borra **después** de que el snippet nuevo esté pegado. Así la ventana de transición
+es **cero cambio de comportamiento**.
 
 ---
 
@@ -1471,10 +1648,10 @@ registrado en `MovimientoPliego` con nota obligatoria. Es **corregible, no autom
 |---|---|
 | **Fase actual** | ✅ **Fases 1-7 COMPLETADAS** (2026-08-13) + **cambio de lógica a escalones** (§5.0) + **corrección: el escalón lo fija el ancho pedido** (§5.0.1, 2026-08-14). Todo el código está en producción; falta activarlo. |
 | **Bloqueantes** | Ninguno. |
-| **Acción pendiente de Jonas (2 cosas)** | **(a)** Pegar en el editor de temas de Shopify **`snippets/custom-size-snippet.liquid` Y `assets/functions.js`** (versión **`2026-08-14b-layout-tramas-carrusel`**, que ya incluye la corrección de escalones **y** la Fase 3) **y comprobar en la consola del producto que sale `[CSW] snippet 2026-08-14b-layout-tramas-carrusel`** — el 2026-08-13 el paste no llegó al tema publicado y la tienda siguió validando con la regla vieja. **(b)** Crear `PLIEGOS_MODO=log` en Vercel → Settings → Environment Variables → Production, y redeploy. |
+| **Acción pendiente de Jonas (2 cosas)** | **(a)** Pegar en el editor de temas de Shopify **`snippets/custom-size-snippet.liquid` Y `assets/functions.js`** (versión **`2026-08-14c-stock-y-precio-por-trama`**, que incluye todo lo anterior: escalones, Fase 3 y stock/precio por trama) **y comprobar en la consola del producto que sale `[CSW] snippet 2026-08-14c-stock-y-precio-por-trama`** — el 2026-08-13 el paste no llegó al tema publicado y la tienda siguió validando con la regla vieja. **(b)** Crear `PLIEGOS_MODO=log` en Vercel → Settings → Environment Variables → Production, y redeploy. |
 | **Estado si no se hace nada** | Con `PLIEGOS_MODO` sin definir el modo es `off`: el control de stock no hace absolutamente nada y la tienda se comporta igual que antes. Nada está activo por accidente. |
-| **Datos en producción** | 11 pliegos colgados de `Alfombra test 2` (`cmoipz5lp0000l704zvl3nx6h`, topes 400×2100 cm) · **13 659 cm restantes** tras las compras de prueba de Jonas (100→2100×4 · **300→70×4** · 400→959/2010/2010) · 5 reservas `confirmada` · escalones vigentes: **1–100 → 2100 · 101–300 → 70 · 301–400 → 2010** |
-| **Pendiente de QA** | En `MODO=log`: **`228×320` y `250×200` deben bloquearse** (su escalón, el 300, está en 70 cm) mientras **`350×300` y `90×300` siguen vendiendo**; slider bloqueando `350×2100`; compra pagada; compra abandonada; carrito mixto. Logs `[PLIEGOS]` en Vercel (traen el escalón y el motivo) + `[CSW]` en el navegador + pestañas Reservas y Cortes. |
+| **Datos en producción** | `Alfombra test 2` (`cmoipz5lp0000l704zvl3nx6h`, topes comerciales 400×2100 cm) con **2 tramas**: · **Ceniza** — 11 rollos `CEN-*`, **12 764 cm** restantes, escalones **1–100 → 2100 · 101–300 → 70 · 301–400 → 2010**, topes 400×2100 · **Alba** — 11 rollos `ALB-*`, **15 600 cm** (enteros), escalones **1–80 → 270 · 81–300 → 2070 · 301–378 → 2040 · 379–380 → 2100 · 381–382 → 2100**, topes **382**×2100. Las dos a 70 000/m² (**el de Alba es placeholder, pendiente de confirmar**). 6 reservas `confirmada`, 22 movimientos `alta`. La otra regla (`Alfombra Medida Personalizada (TEST)`) sigue **sin tramas y sin pliegos**: es el caso de control de que nada se rompe. |
+| **Pendiente de QA** | En `MODO=log`, y ahora **por trama**: `250×200` debe **bloquear en Ceniza** y **vender en Alba**; `390×100` al revés (vende en Ceniza, bloquea en Alba); `228×320` sigue bloqueando en Ceniza. Además: elegir trama habilita los sliders y muestra precio; cambiar de trama reajusta topes (Alba tope 382); auto-selección con una sola trama; botón **Restaurar**; compra pagada; compra abandonada; carrito mixto. Logs `[PLIEGOS]` en Vercel (traen la trama, el escalón y el motivo) + `[CSW]` en el navegador + pestañas Reservas y Cortes. |
 | **Siguiente entregable** | **Fase 8** (no arrancada, se hace con Jonas): `PLIEGOS_MODO=bloqueo`, eliminar `/app/pliegos/debug`, y la matriz de QA end-to-end del plan. |
 
 ### Historial
@@ -1502,7 +1679,9 @@ registrado en `MovimientoPliego` con nota obligatoria. Es **corregible, no autom
 | 2026-08-14 | — | ⚠️ **Campo `tramas` nuevo en `ReglaPersonalizada`** (migración `20260814000000_tramas`) — **ajeno a este módulo** | Es la sección "Tramas" del admin: hasta 4 `{url, nombre}`, mismo patrón que `bordes`. **Ojo con el nombre:** aquí "trama" significa la `ReglaPersonalizada` entera; ese campo son solo 4 imágenes dentro de ella. Aditivo, no afecta a pliegos ni a `capacidades()`. Ver `BITACORA_SESION_2026-08-14.md` §2. |
 | 2026-08-14 | **§5.0.1** | 🔶 **CORRECCIÓN DE REGLA — el escalón lo fija el ANCHO PEDIDO** | Pedida por el cliente. La rotación **ya no puede cambiar de escalón**: el escalón se calcula una sola vez con el ancho pedido y la rotación solo resuelve el largo dentro de él (exigiendo además `alto <= escalon`). **Caso que estaba mal:** `228×320` se vendía porque, girada, el alto 320 saltaba al escalón 400. **Deroga la decisión de simetría del 2026-08-13**: ahora `228×320` bloquea y `320×228` vende, y la asimetría es intencionada. Cambiado a la vez en la sentencia atómica, en `evaluar()`/`factible()`, en los topes de `/api/precio` (`maxAncho` ya no puede venir del largo de un rollo) y en el snippet. Validado con la escalera real `[{100,2100},{300,70},{400,2010}]`: motor **12/12**, SQL en solo lectura **9/9**, `build` ✅. **Pendiente: que Jonas pegue el snippet** (la versión vigente pasó a ser `2026-08-14b-layout-tramas-carrusel` con la Fase 3 del mismo día). |
 | 2026-08-14 | — | ⚠️ **Fase 3 (rediseño del widget) volvió a tocar el snippet** — ajeno a este módulo | Layout nuevo, selector de tramas, carrusel y fix móvil. **La versión del snippet a pegar pasa a ser `2026-08-14b-layout-tramas-carrusel`**, que ya incluye la corrección de escalones. La lógica de stock NO se tocó: `pliegos.server.ts` intacto, `revisarDisponibilidad()` sin cambios, y la trama obligatoria solo bloquea *además* del stock, nunca desbloquea. Ver `BITACORA_SESION_2026-08-14.md` §3. |
-| | **8** | ⬜ Pendiente | |
+| 2026-08-14 | **§4.4** | 🔷 **CAMBIO DE MODELO — EL STOCK ES POR TRAMA** (migración `20260814200000_stock_por_trama`) | Pedido por el cliente. Los rollos colgaban de la REGLA y todas sus tramas compartían un pozo común; ahora cada `Trama` tiene su inventario y su `precioPorM2`. Las tramas dejan de ser un Json sin identidad y pasan a ser **tabla real** con `onDelete: Restrict` y baja lógica — se descartaron identificar por índice (el form reescribe el array) y por nombre (**un renombre es indetectable** y cambiaría de dueño los rollos). `Pliego.tramaId` NOT NULL. **La lógica de negocio no cambió**: escalones, rotación, reservas de 15 min y expiración son funciones puras sobre `Capacidad[]`; solo cambió de dónde sale ese arreglo. **Migración sin pérdida:** ninguna fila borrada ni re-clavada, `ReservaPliego`/`MovimientoPliego`/`PedidoCustom` **intactos** (cuelgan de `pliegoId`, que no cambia); los 11 `CEN-*` asignados a Ceniza con ids literales y `SET NOT NULL` como verificación. **Riesgo #1 (los DOS filtros de trama en la sentencia atómica) cubierto y probado**: fixture de 2 tramas, 11/11, con 3 casos que fallan si falta el filtro del `SELECT MIN`. Se dio de alta la trama **Alba** con sus 11 rollos. `capacidades` de nivel superior de `/api/precio` se mantiene deprecado para no dejar la tienda sin control antes del paste. **Pendiente: que Jonas pegue los 2 archivos del tema** (`2026-08-14c-stock-y-precio-por-trama`). |
+| 2026-08-14 | **admin** | ✅ Botón **Restaurar** por rollo | Devuelve el rollo a 0% consumido (`largoRestanteCm = largoTotalCm`) con `MovimientoPliego` motivo `'restauracion'` y nota obligatoria, igual que Ajustar. Es para resetear el stock tras el QA sin dar de baja y volver a dar de alta el rollo, que cambiaría su código y rompería la trazabilidad de los cortes. **No toca las reservas**: una pendiente vigente sigue ocupando hasta que venza. |
+| | **8** | ⬜ Pendiente | Va **después** de este cambio: activar `PLIEGOS_MODO=bloqueo` sobre un modelo que estaba a punto de cambiar habría sido trabajo tirado. |
 
 ### Cómo actualizar esta bitácora
 

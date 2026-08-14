@@ -742,12 +742,16 @@ $('body').on('click', '#minicart .csw-comprar', function() {
         // Stock por pliego (Fase 7):
         //  · `id` es la clave de idempotencia de la reserva. Sin él, un doble
         //    clic o un retry de red crearían dos reservas del mismo material.
-        //  · `reglaId` le dice al backend de qué trama es la alfombra.
-        // Los items viejos del localStorage no traen ninguno de los dos: el
-        // backend los deja pasar (resuelve la trama por variantId y genera un
-        // refId), así que no rompen nada.
+        //  · `reglaId` le dice al backend de qué producto es la alfombra.
+        //  · `tramaId` le dice de qué TRAMA, que es donde vive el stock desde
+        //    el cambio del 2026-08-14. Sin él el backend cae al nombre en
+        //    `trama`, y si tampoco lo hay, a la única trama de la regla.
+        // Los items viejos del localStorage no traen ninguno: el backend los
+        // deja pasar (resuelve por variantId y genera un refId), así que no
+        // rompen nada.
         id:                      item.id      || null,
         reglaId:                 item.reglaId || null,
+        tramaId:                 item.tramaId || null,
         tipo:                    item.tipo || 'medida',
         ancho:                   item.ancho            || null,
         alto:                    item.alto             || null,

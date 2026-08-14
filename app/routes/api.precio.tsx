@@ -1,6 +1,12 @@
 import type { LoaderFunctionArgs } from "react-router";
 import { neon } from "@neondatabase/serverless";
-import { capacidades, hayMaterial, tienePliegos, type Capacidad } from "../lib/pliegos.server";
+import {
+  capacidades,
+  capacidadesDeRegla,
+  hayMaterial,
+  tramasDeRegla,
+  type Capacidad,
+} from "../lib/pliegos.server";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -79,15 +85,18 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
            typeof b.tipo      === "string" && b.tipo.trim()
   );
 
-  // Tramas (Fase 3): mismo criterio que bordes pero con 2 campos, no 3.
-  // El admin guarda los 4 slots incluidos los vacíos; aquí se filtran los
-  // completos, que son los únicos que el widget debe pintar.
-  type TramaItem = { url: string; nombre: string };
-  const tramasRaw = Array.isArray((regla as any).tramas) ? ((regla as any).tramas as TramaItem[]) : [];
-  const tramas = tramasRaw.filter(
-    (t) => t && typeof t.url    === "string" && t.url.trim() &&
-           typeof t.nombre === "string" && t.nombre.trim()
-  );
+  // 🔷 Tramas (§4.4). Ya NO salen del Json de la regla: son filas de `Trama`,
+  // y cada una viaja con SU capacidad, SUS topes y SU precio por m². Todo en
+  // esta misma respuesta, para que cambiar de trama en el widget no necesite
+  // otra llamada.
+  //
+  // El cálculo va dentro de un try/catch por trama más abajo; aquí solo la lista.
+  let tramasRows: Awaited<ReturnType<typeof tramasDeRegla>> = [];
+  try {
+    tramasRows = await tramasDeRegla(shop, regla.id);
+  } catch (e) {
+    console.error("[api.precio] Error leyendo tramas (se ignora):", e);
+  }
 
   // Textos impermeabilizador (con defaults si el merchant no los configuró)
   const textosImp = configRows.length ? {
@@ -125,56 +134,97 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   // anchos agotados viajan con `largoMaxCm: 0` porque el widget los necesita
   // para calcular el escalón. Un ancho agotado que desapareciera del arreglo
   // haría que el widget ofreciera el escalón de arriba.
-  let capacidadesResp: Capacidad[] | undefined;
-  let topes = {
+  const topesComerciales = {
     minAncho: regla.minAncho,
     maxAncho: regla.maxAncho,
     minAlto: regla.minAlto,
     maxAlto: regla.maxAlto,
   };
 
-  try {
-    if (await tienePliegos(shop, regla.id)) {
-      capacidadesResp = await capacidades(shop, regla.id);
+  /**
+   * Topes de slider a partir de una escalera. §2.4 híbrido: el tope manual es un
+   * techo COMERCIAL y el físico solo puede restringirlo, nunca ampliarlo.
+   *
+   * 🔶 Los dos topes son DISTINTOS desde la corrección del 2026-08-14:
+   *  · ANCHO — el ancho pedido fija el escalón y la rotación ya no puede sacarlo
+   *    de ahí, así que el techo es el mayor ancho de rollo CON material.
+   *  · ALTO — puede irse a lo largo del rollo (normal) o a lo ancho (rotada),
+   *    así que su techo es el mayor de los dos.
+   * Los dos son cotas superiores flojas: dicen qué es imposible seguro, no qué
+   * se puede vender. El par concreto lo valida `evaluar()` / `evaluarMedida()`.
+   */
+  function topesDe(caps: Capacidad[]) {
+    if (!hayMaterial(caps)) return topesComerciales;  // agotada: el slider no se acota a 0
+    const conMaterial = caps.filter((c) => c.largoMaxCm > 0);
+    return {
+      minAncho: regla.minAncho,
+      maxAncho: Math.min(regla.maxAncho, conMaterial.reduce((mx, c) => Math.max(mx, c.anchoCm), 0)),
+      minAlto: regla.minAlto,
+      maxAlto: Math.min(regla.maxAlto, conMaterial.reduce((mx, c) => Math.max(mx, c.anchoCm, c.largoMaxCm), 0)),
+    };
+  }
 
-      if (hayMaterial(capacidadesResp)) {
-        // Solo cuentan los anchos CON material: un escalón seco no puede vender
-        // nada, así que ampliar el slider por su ancho sería ofrecer humo.
-        const conMaterial = capacidadesResp.filter((c) => c.largoMaxCm > 0);
+  // 🔷 Una escalera, unos topes y un precio POR TRAMA. Los tres estados de la
+  // Fase 5 siguen valiendo, pero ahora son por trama:
+  //   · `capacidades` ausente en la trama → no tiene rollos → sin control de stock
+  //   · sin ningún largoMaxCm > 0         → AGOTADA (esa trama, no el producto)
+  //   · con material                      → el widget valida el par por escalones
+  type TramaResp = {
+    id: string;
+    nombre: string;
+    url: string;
+    precioPorM2: number;
+    capacidades?: Capacidad[];
+    agotada: boolean;
+    regla: typeof topesComerciales;
+  };
 
-        // 🔶 Los dos topes son DISTINTOS desde la corrección del 2026-08-14, y
-        // mezclarlos era engañoso:
-        //
-        //  · ANCHO — el ancho pedido fija el escalón, y la rotación ya no puede
-        //    sacarlo de ahí. Así que un ancho por encima del rollo más ancho CON
-        //    material cae siempre en un escalón seco o inexistente: no se puede
-        //    vender ni girándolo. El tope es el ancho de rollo, nunca el largo.
-        //
-        //  · ALTO — puede irse a lo largo del rollo (orientación normal) o a lo
-        //    ancho (rotada), así que su techo es el mayor de los dos.
-        //
-        // Los dos son cotas superiores flojas: dicen qué es imposible seguro, no
-        // qué se puede vender. El par concreto lo valida `evaluar()`.
-        const topeAncho = conMaterial.reduce((mx, c) => Math.max(mx, c.anchoCm), 0);
-        const topeAlto = conMaterial.reduce((mx, c) => Math.max(mx, c.anchoCm, c.largoMaxCm), 0);
-        // §2.4 — híbrido: el tope manual es un techo COMERCIAL y el físico solo
-        // puede restringirlo, nunca ampliarlo.
-        topes = {
-          minAncho: regla.minAncho,
-          maxAncho: Math.min(regla.maxAncho, topeAncho),
-          minAlto: regla.minAlto,
-          maxAlto: Math.min(regla.maxAlto, topeAlto),
-        };
+  const tramas: TramaResp[] = [];
+  for (const t of tramasRows) {
+    const base: TramaResp = {
+      id: t.id,
+      nombre: t.nombre,
+      url: t.url,
+      // Si la trama no tiene precio propio se cae al de la regla, para que una
+      // trama recién creada no muestre 0.
+      precioPorM2: t.precioPorM2 > 0 ? t.precioPorM2 : regla.precioPorM2,
+      agotada: false,
+      regla: topesComerciales,
+    };
+    try {
+      if (t.rollos > 0) {
+        const caps = await capacidades(shop, t.id);
+        base.capacidades = caps;
+        base.agotada = !hayMaterial(caps);
+        base.regla = topesDe(caps);
       }
-      // Si está agotado se dejan los topes comerciales tal cual: acotarlos a 0
-      // dejaría el slider inservible. El widget mostrará "Agotado" por el
-      // arreglo vacío, no por los topes.
-      console.log("[api.precio] capacidades:", JSON.stringify(capacidadesResp), "topes:", JSON.stringify(topes));
+    } catch (e) {
+      // El stock nunca debe tumbar el precio: la trama se sirve sin control.
+      console.error(`[api.precio] Error calculando capacidades de la trama ${t.nombre} (se ignora):`, e);
+      delete base.capacidades;
+    }
+    tramas.push(base);
+  }
+  console.log("[api.precio] tramas:", JSON.stringify(tramas.map((t) => ({
+    nombre: t.nombre, precioPorM2: t.precioPorM2, agotada: t.agotada,
+    caps: t.capacidades, topes: [t.regla.maxAncho, t.regla.maxAlto],
+  }))));
+
+  // ── @deprecated — `capacidades` y `regla` de nivel superior ────────────────
+  // Mezclan el stock de todas las tramas del producto, que es justo lo que el
+  // §4.4 vino a arreglar. Se mantienen porque el snippet que HOY está pegado en
+  // el tema los consume, y quitarlos de golpe dejaría la tienda sin bloquear
+  // ninguna medida. Se borran cuando el paste del snippet nuevo esté confirmado.
+  let capacidadesResp: Capacidad[] | undefined;
+  let topes = topesComerciales;
+  try {
+    const capsRegla = await capacidadesDeRegla(shop, regla.id);
+    if (capsRegla.length) {
+      capacidadesResp = capsRegla;
+      topes = topesDe(capsRegla);
     }
   } catch (e) {
-    // El stock nunca debe tumbar el cálculo de precio: si algo falla, el
-    // widget sigue funcionando exactamente como antes de este módulo.
-    console.error("[api.precio] Error calculando capacidades (se ignora):", e);
+    console.error("[api.precio] Error calculando capacidades de la regla (se ignora):", e);
     capacidadesResp = undefined;
   }
 
@@ -183,6 +233,8 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       precio,
       waterproofPrecio,
       waterproofActivo: regla.waterproofActivo,
+      // Precio por m² de la regla. El widget nuevo usa el de la trama elegida;
+      // esto queda como fallback y para el snippet viejo.
       precioPorM2: regla.precioPorM2,
       waterproofPorM2: regla.waterproofPorM2,
       regla: topes,

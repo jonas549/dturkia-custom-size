@@ -58,6 +58,9 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     // hasta entonces el backend resuelve la trama desde variantId.
     id?: string | null;
     reglaId?: string | null;
+    /** 🔷 id de la Trama elegida (§4.4). Los items viejos del localStorage no
+     *  lo traen: el backend cae al nombre en `trama`. */
+    tramaId?: string | null;
   };
 
   let body: {
@@ -202,6 +205,10 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     indice,
     refId: item.id ?? null,
     reglaId: item.reglaId ?? null,
+    // 🔷 §4.4 — el stock es por trama. `tramaId` lo manda el tema; `trama` (el
+    // nombre) es la red para los items que ya estaban en el localStorage.
+    tramaId: item.tramaId ?? null,
+    trama: item.trama ?? null,
     variantId: item.variantId ?? null,
     anchoCm: Number(item.ancho),
     altoCm: Number(item.alto),

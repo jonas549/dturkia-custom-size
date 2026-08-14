@@ -9,6 +9,7 @@ import { useAppBridge } from "@shopify/app-bridge-react";
 import { authenticate } from "../shopify.server";
 import { boundary } from "@shopify/shopify-app-react-router/server";
 import prisma from "../db.server";
+import { guardarTramas } from "../lib/pliegos.server";
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   await authenticate.admin(request);
@@ -39,14 +40,15 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     if (Array.isArray(parsed)) bordes = parsed;
   } catch { bordes = []; }
 
-  // Tramas: mismo patrón que bordes, con 2 campos en vez de 3.
-  let tramas: { url: string; nombre: string }[] = [];
+  // 🔷 Tramas (§4.4): filas de `Trama`, no un Json. Como la regla todavía no
+  // existe, se crean DESPUÉS del create, con el id recién asignado.
+  let slotsTramas: Array<{ id?: string | null; nombre: string; url: string; precioPorM2: number }> = [];
   try {
     const parsed = JSON.parse(String(fd.get("tramas") ?? "[]"));
-    if (Array.isArray(parsed)) tramas = parsed;
-  } catch { tramas = []; }
+    if (Array.isArray(parsed)) slotsTramas = parsed;
+  } catch { slotsTramas = []; }
 
-  await prisma.reglaPersonalizada.create({
+  const creada = await prisma.reglaPersonalizada.create({
     data: {
       shop: session.shop,
       nombre,
@@ -60,9 +62,16 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       activa: fd.get("activa") === "on",
       productIds,
       bordes,
-      tramas,
+      // `tramas` (el Json) ya no se escribe: columna muerta (§4.4).
     },
+    select: { id: true },
   });
+
+  // Una regla nueva nunca tiene tramas previas, así que esto solo puede dar de
+  // alta. Si falla, la regla ya existe: se avisa y el merchant reintenta desde
+  // el formulario de edición, sin perder lo demás.
+  const resTramas = await guardarTramas(session.shop, creada.id, slotsTramas);
+  if (!resTramas.ok) return { error: resTramas.error };
 
   if (productIds.length > 0) {
     try {
@@ -180,8 +189,8 @@ type BordeItem = { imagenUrl: string; nombre: string; tipo: string };
 const emptyBorde = (): BordeItem => ({ imagenUrl: "", nombre: "", tipo: "" });
 
 /** Trama: como un borde pero SIN `tipo`. Solo imagen + nombre. */
-type TramaItem = { url: string; nombre: string };
-const emptyTrama = (): TramaItem => ({ url: "", nombre: "" });
+type TramaItem = { url: string; nombre: string; precioPorM2: string };
+const emptyTrama = (): TramaItem => ({ url: "", nombre: "", precioPorM2: "" });
 
 export default function NuevaRegla() {
   const actionData = useActionData<typeof action>();
@@ -507,19 +516,20 @@ export default function NuevaRegla() {
             <input type="hidden" name="bordes" value={JSON.stringify(bordes)} />
           </div>
 
-          {/* Tramas — mismo patrón que Bordes, pero solo URL + Nombre.
-              Por ahora es solo carga: el widget de la tienda todavía no las
-              consume; se conectarán al frontend en el rediseño. */}
+          {/* 🔷 Tramas (§4.4) — cada trama es una fila con SU inventario de
+              rollos y SU precio por m². El stock se carga después, en
+              Stock de pliegos. */}
           <div style={{ marginTop: 28, borderTop: "1px solid #e4e5e7", paddingTop: 20 }}>
             <span style={{ ...labelStyle, fontSize: 14, marginBottom: 4 }}>Tramas</span>
             <p style={{ fontSize: 13, color: "#6d7175", margin: "0 0 16px" }}>
               Hasta 4 tramas. Sube la imagen en Shopify Admin → Settings → Files, copia la URL CDN
-              y pégala aquí. Un slot con los 2 campos completos se guarda como válido; si alguno
-              está vacío, se ignora. <strong>Todavía no se muestran en la tienda</strong> — se
-              conectarán al configurador en el rediseño de la página de personalización.
+              y pégala aquí. <strong>Cada trama tiene su propio stock de rollos y su propio precio
+              por m²</strong>: el cliente la elige en la tienda y ahí se decide qué medidas hay
+              disponibles y cuánto cuesta. Un slot necesita <strong>nombre</strong> para guardarse.
+              Los rollos se cargan luego en <strong>Stock de pliegos</strong>.
             </p>
             {tramas.map((trama, i) => {
-              const completo = !!(trama.url && trama.nombre);
+              const completo = !!trama.nombre;
               return (
                 <div
                   key={i}
@@ -535,7 +545,7 @@ export default function NuevaRegla() {
                     Trama {i + 1}{trama.nombre ? ` — ${trama.nombre}` : ""}
                     {completo && <span style={{ marginLeft: 8, color: "#008060" }}>✓ Completo</span>}
                   </div>
-                  <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr", gap: 10, marginBottom: trama.url ? 10 : 0 }}>
+                  <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr 1fr", gap: 10, marginBottom: trama.url ? 10 : 0 }}>
                     <div>
                       <label style={labelStyle}>URL de la imagen</label>
                       <input
@@ -556,6 +566,18 @@ export default function NuevaRegla() {
                         placeholder="Ceniza"
                       />
                     </div>
+                    <div>
+                      <label style={labelStyle}>Precio por m² (CLP)</label>
+                      <input
+                        type="number"
+                        min="0"
+                        step="1"
+                        value={trama.precioPorM2}
+                        onChange={(e) => actualizarTrama(i, "precioPorM2", e.target.value)}
+                        style={inputStyle}
+                        placeholder="70000"
+                      />
+                    </div>
                   </div>
                   {trama.url && (
                     <img
@@ -568,7 +590,17 @@ export default function NuevaRegla() {
                 </div>
               );
             })}
-            <input type="hidden" name="tramas" value={JSON.stringify(tramas)} />
+            <input
+              type="hidden"
+              name="tramas"
+              value={JSON.stringify(
+                tramas.map((t) => ({
+                  nombre: t.nombre,
+                  url: t.url,
+                  precioPorM2: Number(t.precioPorM2) || 0,
+                })),
+              )}
+            />
           </div>
 
           {/* Botones */}

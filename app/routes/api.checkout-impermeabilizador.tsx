@@ -49,6 +49,9 @@ type ItemInput = {
   // Stock por pliego (Fase 4). El tema los enviará en las Fases 6 y 7.
   id?: string | null;
   reglaId?: string | null;
+  /** 🔷 id de la Trama elegida (§4.4). Los items viejos del localStorage no lo
+   *  traen: el backend cae al nombre en `trama`. */
+  tramaId?: string | null;
 };
 
 export const action = async ({ request }: ActionFunctionArgs) => {
@@ -137,6 +140,9 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       indice,
       refId: item.id ?? null,
       reglaId: item.reglaId ?? null,
+      // 🔷 §4.4 — el stock es por trama. Igual que en /api/checkout.
+      tramaId: item.tramaId ?? null,
+      trama: item.trama ?? null,
       variantId: item.variantId ?? null,
       anchoCm: Number(item.ancho),
       altoCm: Number(item.alto),
