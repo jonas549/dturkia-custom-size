@@ -19,7 +19,7 @@ import {
   eliminarReservas,
   escalones,
   estadoPliegos,
-  factible,
+  evaluar,
   reconciliar,
   reservar,
   RESERVA_TTL_MIN,
@@ -31,16 +31,30 @@ import {
 const PREFIJO = "debug_";
 
 // La matriz del plan (§FASE 2 › Validación) que se puede correr de un clic.
+/**
+ * ⚠️ Las expectativas dependen del inventario. Están calibradas para el estado
+ * del 2026-08-14: 100→2100 · 300→70 (prácticamente seco) · 400→2010.
+ *
+ * Los cuatro primeros casos son la REGRESIÓN de la corrección del 2026-08-14
+ * (el escalón lo fija el ancho pedido). Antes de ella, 228×320 y 250×200 se
+ * vendían girados desde el rollo de 400, que es justo lo que no debe pasar.
+ */
 const MATRIZ = [
+  { nombre: "228×320", anchoCm: 228, altoCm: 320, espera: "SIN_STOCK · escalón 300 seco, NO salta al 400" },
+  { nombre: "250×200", anchoCm: 250, altoCm: 200, espera: "SIN_STOCK · escalón 300 seco" },
+  { nombre: "350×300", anchoCm: 350, altoCm: 300, espera: "CEN-400-0x · escalón 400 con material" },
+  { nombre: "90×300", anchoCm: 90, altoCm: 300, espera: "CEN-100-0x · escalón 100 lleno" },
   { nombre: "100×300", anchoCm: 100, altoCm: 300, espera: "CEN-100-01 · no rotada · consume 300" },
   { nombre: "350×400", anchoCm: 350, altoCm: 400, espera: "CEN-400-0x · ROTADA · consume 350" },
-  { nombre: "250×350", anchoCm: 250, altoCm: 350, espera: "CEN-300-0x · no rotada · consume 350" },
+  { nombre: "250×50", anchoCm: 250, altoCm: 50, espera: "CEN-300-0x · el 300 no está en 0: quedan 70 cm" },
   { nombre: "350×2100", anchoCm: 350, altoCm: 2100, espera: "SIN_STOCK" },
 ];
 
 type Fila = {
   caso: string;
   espera: string;
+  /** Escalón que fija el ANCHO pedido, y el porqué del veredicto. */
+  escalon: string;
   resultado: string;
   pliego: string;
   rotada: string;
@@ -120,6 +134,11 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   try {
     for (const c of casos) {
       const antes = await estadoPliegos(shop, reglaId);
+      // El veredicto se calcula ANTES de reservar y con la misma escalera que
+      // verá el motor: es el "por qué" de la fila, y permite ver de un vistazo
+      // si el bloqueo vino del escalón del ancho o de falta de largo.
+      const v = evaluar(c.anchoCm, c.altoCm, await capacidades(shop, reglaId));
+      const escalon = `${v.escalonCm ?? "—"} · ${v.motivo}`;
       const refId = `${PREFIJO}${Date.now()}_${c.anchoCm}x${c.altoCm}`;
       refIds.push(refId);
 
@@ -135,6 +154,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         filas.push({
           caso: c.nombre,
           espera: c.espera,
+          escalon,
           resultado: "RESERVADO",
           pliego: `${r.pliegoCodigo} (ancho ${r.anchoPliegoCm})`,
           rotada: r.rotada ? "SÍ" : "no",
@@ -148,6 +168,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         filas.push({
           caso: c.nombre,
           espera: c.espera,
+          escalon,
           resultado: "SIN_STOCK",
           pliego: "—",
           rotada: "—",
@@ -439,6 +460,7 @@ export default function PliegosDebug() {
                 <thead>
                   <tr>
                     <th style={th}>Caso</th><th style={th}>Esperado</th><th style={th}>Resultado</th>
+                    <th style={th}>Escalón del ancho · motivo</th>
                     <th style={th}>Pliego</th><th style={th}>Rotada</th><th style={th}>Consume</th>
                     <th style={th}>Merma</th><th style={th}>Disp. antes</th><th style={th}>Disp. después</th>
                   </tr>
@@ -453,6 +475,7 @@ export default function PliegosDebug() {
                       <td style={{ ...td, fontWeight: 600, color: f.resultado === "RESERVADO" ? "#008060" : "#8f1c1c" }}>
                         {f.resultado}
                       </td>
+                      <td style={{ ...td, color: "#6d7175", maxWidth: 320 }}>{f.escalon}</td>
                       <td style={td}>{f.pliego}</td>
                       <td style={{ ...td, fontWeight: f.rotada === "SÍ" ? 600 : 400 }}>{f.rotada}</td>
                       <td style={td}>{f.consume}</td>

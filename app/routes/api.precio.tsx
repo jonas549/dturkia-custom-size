@@ -128,22 +128,32 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       capacidadesResp = await capacidades(shop, regla.id);
 
       if (hayMaterial(capacidadesResp)) {
-        // Tope físico por dimensión, CON rotación (decisión 1): una pieza de
-        // lado X cabe si algún rollo tiene ese ancho, o si su largo lo permite
-        // cortándola girada. Por eso el tope es el mayor de ambos.
-        //
         // Solo cuentan los anchos CON material: un escalón seco no puede vender
         // nada, así que ampliar el slider por su ancho sería ofrecer humo.
-        const topeFisico = capacidadesResp
-          .filter((c) => c.largoMaxCm > 0)
-          .reduce((mx, c) => Math.max(mx, c.anchoCm, c.largoMaxCm), 0);
+        const conMaterial = capacidadesResp.filter((c) => c.largoMaxCm > 0);
+
+        // 🔶 Los dos topes son DISTINTOS desde la corrección del 2026-08-14, y
+        // mezclarlos era engañoso:
+        //
+        //  · ANCHO — el ancho pedido fija el escalón, y la rotación ya no puede
+        //    sacarlo de ahí. Así que un ancho por encima del rollo más ancho CON
+        //    material cae siempre en un escalón seco o inexistente: no se puede
+        //    vender ni girándolo. El tope es el ancho de rollo, nunca el largo.
+        //
+        //  · ALTO — puede irse a lo largo del rollo (orientación normal) o a lo
+        //    ancho (rotada), así que su techo es el mayor de los dos.
+        //
+        // Los dos son cotas superiores flojas: dicen qué es imposible seguro, no
+        // qué se puede vender. El par concreto lo valida `evaluar()`.
+        const topeAncho = conMaterial.reduce((mx, c) => Math.max(mx, c.anchoCm), 0);
+        const topeAlto = conMaterial.reduce((mx, c) => Math.max(mx, c.anchoCm, c.largoMaxCm), 0);
         // §2.4 — híbrido: el tope manual es un techo COMERCIAL y el físico solo
         // puede restringirlo, nunca ampliarlo.
         topes = {
           minAncho: regla.minAncho,
-          maxAncho: Math.min(regla.maxAncho, topeFisico),
+          maxAncho: Math.min(regla.maxAncho, topeAncho),
           minAlto: regla.minAlto,
-          maxAlto: Math.min(regla.maxAlto, topeFisico),
+          maxAlto: Math.min(regla.maxAlto, topeAlto),
         };
       }
       // Si está agotado se dejan los topes comerciales tal cual: acotarlos a 0

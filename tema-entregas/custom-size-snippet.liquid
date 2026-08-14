@@ -664,7 +664,7 @@
      anterior y el widget validaba con la regla vieja, permitiendo medidas
      imposibles.
   --------------------------------------------------------------------------- */
-  var CSW_VERSION = '2026-08-13-escalones';
+  var CSW_VERSION = '2026-08-14-escalon-por-ancho-pedido';
   console.log('%c[CSW] snippet ' + CSW_VERSION,
               'background:#111;color:#7CFC00;padding:2px 8px;border-radius:3px;font-weight:bold');
 
@@ -678,13 +678,29 @@
     document.documentElement.classList.remove('csw-natives-hidden');
   }
 
-  /* ─── Stock por pliego — ESCALONES POR ANCHO DE ROLLO ──────────────────────
-     Cada ancho de rollo que existe en la trama define un ESCALÓN. Un pedido se
-     asigna al escalón del PRIMER ancho de rollo >= al ancho pedido, y solo
-     puede cortarse de rollos de ESE ancho exacto. Un escalón sin material NO
-     toma prestado del escalón de arriba: con anchos {100, 300, 400}, un pedido
-     de 250 cm de ancho se bloquea si los rollos de 300 están sin largo, aunque
-     los de 400 estén llenos.
+  /* ─── Stock por pliego — EL ESCALÓN LO FIJA EL ANCHO PEDIDO ────────────────
+     Cada ancho de rollo que existe en la trama define un ESCALÓN. Lo PRIMERO
+     que se calcula, y lo único que decide en qué rollos se busca, es:
+
+         escalon = el PRIMER ancho de rollo >= AL ANCHO QUE PIDIÓ EL CLIENTE
+
+     Toda la validación ocurre dentro de ese escalón. Un escalón sin material NO
+     toma prestado del de arriba: con anchos {100, 300, 400} y los rollos de 300
+     secos, un pedido de 228 cm de ancho se BLOQUEA aunque los de 400 estén
+     llenos, y se bloquea con cualquier alto.
+
+     🔶 CORRECCIÓN 2026-08-14 — LA ROTACIÓN NO CAMBIA DE ESCALÓN. Antes cada
+     orientación calculaba su propio escalón (la rotada, sobre el alto), y por
+     ahí se colaba 228×320: girada pasaba a ser 320 de ancho, escalón 400, con
+     material. Eso vendía material de 400 a quien pidió 228 de ancho. Ahora la
+     rotación solo sirve para resolver el LARGO dentro del escalón del ancho
+     pedido:
+       · normal → el ancho va a lo ancho del rollo, consume `alto` de largo.
+       · rotada → el alto va a lo ancho del rollo (exige alto <= escalon) y
+                  consume `ancho` de largo.
+
+     Consecuencia buscada: la regla es ASIMÉTRICA. 228×320 se bloquea y 320×228
+     se permite, porque son pedidos distintos — el cliente pide un ancho.
 
      `capacidades` llega de /api/precio como [{anchoCm, largoMaxCm}] y es LA
      ESCALERA de anchos de rollo, no "lo vendible": los anchos sin material
@@ -695,14 +711,10 @@
        · ningún largoMaxCm > 0      → no queda material → AGOTADO.
        · con material               → se valida el par en cada movimiento.
 
-     Se evalúan las DOS orientaciones porque la alfombra puede cortarse rotada,
-     y cada una usa el escalón del lado que va A LO ANCHO DEL ROLLO. Es
-     simétrico: 250×350 y 350×250 son la misma pieza y dan la misma respuesta.
-
-     ⚠️ Esta lógica es la MISMA que `escalonPara()`/`factible()` de
-     app/lib/pliegos.server.ts. Si se cambia una, hay que cambiar la otra o el
-     widget y el checkout se contradicen. Aun así el checkout revalida siempre:
-     el frontend nunca es autoridad sobre el stock.
+     ⚠️ Esta lógica es la MISMA que `evaluar()` de app/lib/pliegos.server.ts. Si
+     se cambia una, hay que cambiar la otra o el widget y el checkout se
+     contradicen. Aun así el checkout revalida siempre: el frontend nunca es
+     autoridad sobre el stock.
   --------------------------------------------------------------------------- */
   function escalonPara(medidaCm, capacidades) {
     var mejor = null;
@@ -721,32 +733,60 @@
     return false;
   }
 
+  /* Espejo de `evaluar()` del backend: devuelve el veredicto Y el motivo. */
+  function evaluarMedida(anchoCm, altoCm, capacidades) {
+    var esc = escalonPara(anchoCm, capacidades);
+
+    if (!esc) {
+      return { escalonCm: null, largoMaxCm: 0, permite: false, orientacion: null,
+               motivo: 'no existe ningún rollo de ancho >= ' + anchoCm + ' cm' };
+    }
+    if (esc.largoMaxCm <= 0) {
+      return { escalonCm: esc.anchoCm, largoMaxCm: 0, permite: false, orientacion: null,
+               motivo: 'el escalón ' + esc.anchoCm + ' cm (el del ancho pedido ' + anchoCm +
+                       ') está AGOTADO; no se salta al escalón de arriba' };
+    }
+    /* Normal: el ancho ya cabe a lo ancho del rollo por definición de escalón. */
+    if (esc.largoMaxCm >= altoCm) {
+      return { escalonCm: esc.anchoCm, largoMaxCm: esc.largoMaxCm, permite: true, orientacion: 'normal',
+               motivo: 'normal en el escalón ' + esc.anchoCm + ': consume ' + altoCm +
+                       ' de largo y hay ' + esc.largoMaxCm };
+    }
+    /* Rotada: solo si el alto también cabe a lo ancho de ESTE mismo rollo. */
+    if (altoCm <= esc.anchoCm && esc.largoMaxCm >= anchoCm) {
+      return { escalonCm: esc.anchoCm, largoMaxCm: esc.largoMaxCm, permite: true, orientacion: 'rotada',
+               motivo: 'rotada dentro del escalón ' + esc.anchoCm + ': el alto ' + altoCm +
+                       ' cabe a lo ancho del rollo y consume ' + anchoCm + ' de largo' };
+    }
+    var porQueNo = altoCm > esc.anchoCm
+      ? 'el alto ' + altoCm + ' no cabe a lo ancho del rollo de ' + esc.anchoCm
+      : 'girada consumiría ' + anchoCm + ' de largo';
+    return { escalonCm: esc.anchoCm, largoMaxCm: esc.largoMaxCm, permite: false, orientacion: null,
+             motivo: 'escalón ' + esc.anchoCm + ' con solo ' + esc.largoMaxCm +
+                     ' de largo: normal necesita ' + altoCm + ' y ' + porQueNo };
+  }
+
   function cabeEnCapacidades(anchoCm, altoCm, capacidades) {
     if (!capacidades || !capacidades.length) {
       console.log('[CSW] validando ' + anchoCm + 'x' + altoCm + ' => sin escalera de capacidades');
       return false;
     }
 
-    var normal = escalonPara(anchoCm, capacidades);   /* consume altoCm de largo */
-    var rotada = escalonPara(altoCm,  capacidades);   /* consume anchoCm de largo */
-    var okNormal = !!(normal && normal.largoMaxCm >= altoCm);
-    var okRotada = !!(rotada && rotada.largoMaxCm >= anchoCm);
-    var cabe     = okNormal || okRotada;
+    var v = evaluarMedida(anchoCm, altoCm, capacidades);
 
-    /* Un solo log con TODO lo que hace falta para auditar la decisión:
-       qué escalón le tocó a cada orientación, cuánto largo hay en ese escalón
-       y cuánto pide la pieza. Si esto no aparece al mover el slider, es que la
-       validación no se está ejecutando. */
+    /* Un solo log con TODO lo que hace falta para auditar la decisión: qué
+       escalón salió del ANCHO pedido, cuánto largo hay en ese escalón, y por
+       qué permite o bloquea. Si esto no aparece al mover el slider, es que la
+       validación no se está ejecutando (o el snippet pegado no es éste). */
     console.log(
       '[CSW] validando ' + anchoCm + 'x' + altoCm +
-      ' | normal: escalon(' + anchoCm + ')=' + (normal ? normal.anchoCm : '—') +
-        ' capEscalon=' + (normal ? normal.largoMaxCm : 0) + ' pedido=' + altoCm + ' → ' + (okNormal ? 'ok' : 'no') +
-      ' | rotada: escalon(' + altoCm + ')=' + (rotada ? rotada.anchoCm : '—') +
-        ' capEscalon=' + (rotada ? rotada.largoMaxCm : 0) + ' pedido=' + anchoCm + ' → ' + (okRotada ? 'ok' : 'no') +
-      ' => ' + (cabe ? 'DISPONIBLE' : 'NO DISPONIBLE, deshabilitando botón'),
+      ' | escalón(ancho ' + anchoCm + ') = rollo ' + (v.escalonCm === null ? '—' : v.escalonCm) +
+      ' | largo disponible en ese escalón = ' + v.largoMaxCm +
+      ' | ' + (v.permite ? 'PERMITE (' + v.orientacion + ')' : 'BLOQUEA') +
+      ' → ' + v.motivo,
     );
 
-    return cabe;
+    return v.permite;
   }
 
   /* El aviso tiene que salir DEBAJO DE LOS SLIDERS, que es donde el cliente
@@ -963,11 +1003,14 @@
           console.log('[CSW] capacidades recibidas:', JSON.stringify(capacidades));
           var escalera = [], desde = 1;
           for (var ci = 0; ci < capacidades.length; ci++) {
-            escalera.push('ancho ' + desde + '-' + capacidades[ci].anchoCm +
-                          ' → largo ≤ ' + capacidades[ci].largoMaxCm);
+            escalera.push('ancho pedido ' + desde + '-' + capacidades[ci].anchoCm +
+                          ' → rollo ' + capacidades[ci].anchoCm +
+                          ', largo ≤ ' + capacidades[ci].largoMaxCm +
+                          (capacidades[ci].largoMaxCm <= 0 ? ' (SECO)' : ''));
             desde = capacidades[ci].anchoCm + 1;
           }
-          console.log('[CSW] escalones: ' + escalera.join('  ·  ') +
+          console.log('[CSW] escalones (el escalón lo fija el ANCHO pedido; un escalón seco ' +
+                      'NO salta al de arriba): ' + escalera.join('  ·  ') +
                       (tramaAgotada ? '  ·  SIN MATERIAL EN NINGUNO (agotada)' : ''));
         }
 

@@ -8,8 +8,12 @@
  *    trama define un escalón. Un pedido se asigna al escalón del primer ancho
  *    de rollo >= al ancho requerido, y SOLO puede usar rollos de ESE ancho
  *    exacto. Un escalón sin material NO toma prestado del escalón de arriba.
- *  - Rotación SÍ (decisión 1): se evalúan las dos orientaciones y compiten,
- *    cada una contra el escalón del lado que va a lo ancho del rollo.
+ *  - 🔶 EL ESCALÓN LO FIJA EL ANCHO PEDIDO (corrección 2026-08-14, §5.0.1):
+ *    `escalon = MIN(anchoCm de rollos activos con anchoCm >= ancho pedido)`.
+ *    Es lo PRIMERO que se calcula y no depende de la orientación. Si ese
+ *    escalón está seco, no hay venta — da igual el alto que se pida.
+ *  - Rotación SÍ (decisión 1), pero SOLO DENTRO del escalón del ancho pedido:
+ *    sirve para validar el LARGO, nunca para reasignar la pieza a otro rollo.
  *  - Margen de corte 0 (decisión 2): se descuenta el largo exacto.
  *  - El stock NO se resta, se OCUPA (§3.1). Una reserva 'pendiente' de más de
  *    15 min deja de ocupar sola: es una condición de tiempo en el WHERE.
@@ -186,23 +190,89 @@ export function escalones(caps: Capacidad[]): Escalon[] {
   });
 }
 
+export type Veredicto = {
+  /** Ancho de rollo del escalón, fijado por el ANCHO PEDIDO. null = ningún rollo tan ancho. */
+  escalonCm: number | null;
+  /** Largo disponible en ese escalón (y SOLO en ése). */
+  largoMaxCm: number;
+  permite: boolean;
+  orientacion: "normal" | "rotada" | null;
+  /** Frase lista para el log: por qué permite o por qué bloquea. */
+  motivo: string;
+};
+
 /**
- * ¿Cabe (ancho × alto) en la trama, en alguna de las dos orientaciones?
- * Función pura — está replicada en JS en el snippet (Fase 6) y las dos deben
- * decir SIEMPRE lo mismo, o el widget y el checkout se contradicen.
+ * ¿Cabe (ancho × alto)? Con el porqué, para que los logs del checkout y los del
+ * navegador digan exactamente lo mismo.
  *
- * Cada orientación se valida contra SU PROPIO escalón: el del lado que va a lo
- * ancho del rollo. Es simétrico en (ancho, alto) — la misma alfombra da la
- * misma respuesta se pida 250×350 o 350×250, que es lo correcto porque la
- * merma de ancho de rollo es idéntica en ambos casos.
+ * 🔶 REGLA CORREGIDA (2026-08-14). El escalón lo fija SIEMPRE el ANCHO PEDIDO:
+ *
+ *     escalon = MIN(anchoCm de rollos activos con anchoCm >= anchoPedido)
+ *
+ * y toda la validación ocurre DENTRO de ese escalón. La rotación sigue
+ * existiendo, pero solo para resolver el LARGO ahí dentro:
+ *   · normal → el ancho va a lo ancho del rollo y consume `alto` de largo.
+ *   · rotada → el alto va a lo ancho del rollo (exige `alto <= escalon`) y
+ *              consume `ancho` de largo.
+ * La rotación NO puede llevar la pieza a un rollo de otro ancho.
+ *
+ * ⚠️ La regla es ASIMÉTRICA a propósito, y esto sustituye a la decisión de
+ * simetría del 2026-08-13: con los rollos de 300 secos, 228×320 se BLOQUEA
+ * (escalón 300) mientras que 320×228 se permite (escalón 400). Son pedidos
+ * distintos porque el cliente pide un ancho concreto; no se le puede servir un
+ * corte de otro ancho girándolo.
+ *
+ * Función pura — replicada en JS en el snippet. Si se cambia una, hay que
+ * cambiar la otra o el widget y el checkout se contradicen. Aun así el checkout
+ * revalida siempre: el frontend nunca es autoridad sobre el stock.
  */
+export function evaluar(anchoCm: number, altoCm: number, caps: Capacidad[]): Veredicto {
+  const esc = escalonPara(anchoCm, caps);
+
+  if (esc === null) {
+    return {
+      escalonCm: null, largoMaxCm: 0, permite: false, orientacion: null,
+      motivo: `no existe ningún rollo de ancho >= ${anchoCm} cm (ancho pedido fuera de la escalera)`,
+    };
+  }
+
+  const base = { escalonCm: esc.anchoCm, largoMaxCm: esc.largoMaxCm };
+
+  if (esc.largoMaxCm <= 0) {
+    return {
+      ...base, permite: false, orientacion: null,
+      motivo: `el escalón ${esc.anchoCm} cm (el que corresponde al ancho pedido ${anchoCm}) está AGOTADO; no se salta al escalón de arriba`,
+    };
+  }
+
+  // Normal: el ancho pedido ya cabe a lo ancho del rollo por definición de escalón.
+  if (esc.largoMaxCm >= altoCm) {
+    return {
+      ...base, permite: true, orientacion: "normal",
+      motivo: `normal en el escalón ${esc.anchoCm}: consume ${altoCm} de largo y hay ${esc.largoMaxCm}`,
+    };
+  }
+
+  // Rotada: solo vale si el alto también cabe a lo ancho de ESTE mismo rollo.
+  if (altoCm <= esc.anchoCm && esc.largoMaxCm >= anchoCm) {
+    return {
+      ...base, permite: true, orientacion: "rotada",
+      motivo: `rotada dentro del escalón ${esc.anchoCm}: el alto ${altoCm} cabe a lo ancho del rollo y consume ${anchoCm} de largo (hay ${esc.largoMaxCm})`,
+    };
+  }
+
+  const porQueNoRotada = altoCm > esc.anchoCm
+    ? `el alto ${altoCm} no cabe a lo ancho del rollo de ${esc.anchoCm}`
+    : `girada consumiría ${anchoCm} de largo`;
+  return {
+    ...base, permite: false, orientacion: null,
+    motivo: `escalón ${esc.anchoCm} con solo ${esc.largoMaxCm} de largo: normal necesita ${altoCm} y ${porQueNoRotada}`,
+  };
+}
+
+/** Atajo booleano de `evaluar()`. */
 export function factible(anchoCm: number, altoCm: number, caps: Capacidad[]): boolean {
-  const normal = escalonPara(anchoCm, caps);   // consume `altoCm` de largo
-  const rotada = escalonPara(altoCm, caps);    // consume `anchoCm` de largo
-  return (
-    (normal !== null && normal.largoMaxCm >= altoCm) ||
-    (rotada !== null && rotada.largoMaxCm >= anchoCm)
-  );
+  return evaluar(anchoCm, altoCm, caps).permite;
 }
 
 // ── 2. reservar() ───────────────────────────────────────────────────────────
@@ -227,12 +297,22 @@ export function factible(anchoCm: number, altoCm: number, caps: Capacidad[]): bo
  * Bloquea solo filas de "Pliego" y serializa dos compras simultáneas del mismo
  * rollo sin esperas: la segunda salta al siguiente candidato.
  *
- * 🔶 REGLA DE ESCALONES (cambio de 2026-08-13): la condición de ancho pasó de
- * `p."anchoCm" >= o."anchoReq"` (cualquier rollo más ancho servía) a
- * `p."anchoCm" = <primer ancho de rollo >= o."anchoReq">`. Cada orientación
- * calcula su propio escalón sobre el ancho que ella usa. Si no existe ningún
- * ancho de rollo >= al requerido, el MIN es NULL, la igualdad no se cumple y
- * esa orientación no aporta candidatos.
+ * 🔶 REGLA DE ESCALONES — CORRECCIÓN 2026-08-14. El escalón se calcula con el
+ * ANCHO PEDIDO (`${anchoCm}`, constante para las dos orientaciones), no con
+ * `o."anchoReq"` como hasta ahora. Ése era el bug: la orientación rotada
+ * calculaba SU PROPIO escalón sobre el alto, así que un pedido de ancho 228
+ * (escalón 300, seco) se colaba girado por el escalón 400. La rotación no puede
+ * cambiar de rollo; solo resuelve el largo dentro del escalón que ya fijó el
+ * ancho pedido.
+ *
+ * De ahí las dos condiciones de ancho, que hacen cosas distintas:
+ *   1. `p."anchoCm" = (SELECT MIN ... >= ${anchoCm})` — encierra la búsqueda en
+ *      el escalón del ancho pedido. Si no hay ningún rollo tan ancho el MIN es
+ *      NULL, la igualdad no se cumple y no hay candidatos.
+ *   2. `o."anchoReq" <= p."anchoCm"` — cada orientación tiene que caber a lo
+ *      ancho de ESE rollo. Para la normal siempre se cumple (es la definición
+ *      del escalón); es la condición que descarta la rotada cuando el alto es
+ *      más ancho que el rollo.
  */
 async function reservarItem(
   shop: string,
@@ -261,26 +341,32 @@ async function reservarItem(
       WHERE p.shop = ${shop}
         AND p."reglaId" = ${reglaId}
         AND p.activo
-        -- ↓↓↓ ESCALÓN: el rollo tiene que ser del PRIMER ancho >= al requerido,
-        -- no de cualquiera más ancho. NULL (no hay ancho suficiente) → sin match.
+        -- ↓↓↓ ESCALÓN, fijado por el ANCHO PEDIDO (no por la orientación):
+        -- el rollo tiene que ser del PRIMER ancho >= al ancho que pidió el
+        -- cliente. NULL (no hay ningún rollo tan ancho) → sin candidatos.
         AND p."anchoCm" = (
               SELECT MIN(p2."anchoCm") FROM "Pliego" p2
               WHERE p2.shop = ${shop}
                 AND p2."reglaId" = ${reglaId}
                 AND p2.activo
-                AND p2."anchoCm" >= o."anchoReq"
+                AND p2."anchoCm" >= ${anchoCm}::int
             )
+        -- ↓↓↓ y la orientación tiene que caber a lo ancho de ESE rollo. Descarta
+        -- la rotada cuando el alto es más ancho que el rollo del escalón.
+        AND o."anchoReq" <= p."anchoCm"
         AND p."largoRestanteCm" - COALESCE((
               SELECT SUM(r2."largoCm") FROM "ReservaPliego" r2
               WHERE r2."pliegoId" = p.id
                 AND r2.estado = 'pendiente'
                 AND r2."createdAt" > NOW() - make_interval(mins => ${RESERVA_TTL_MIN}::int)
             ), 0) >= o.largo
-      ORDER BY (p."anchoCm" - o."anchoReq") ASC,  -- 1. menos merma (decide ENTRE las dos orientaciones;
-                                                  --    dentro de una, el escalón ya fijó el ancho)
-               p."anchoCm" ASC,                    -- 2. a igual merma, el rollo más angosto
-               disponible ASC,                     -- 3. el rollo más gastado primero
-               p.codigo ASC,                       -- 4. determinista y legible en QA
+      -- Todos los candidatos son ya del MISMO ancho de rollo (el del escalón),
+      -- así que aquí solo se decide ENTRE LAS DOS ORIENTACIONES y entre rollos
+      -- hermanos. El criterio p."anchoCm" ASC desapareció: ya era constante.
+      ORDER BY (p."anchoCm" - o."anchoReq") ASC,  -- 1. la orientación con menos merma de ancho,
+                                                  --    que es también la que consume menos largo
+               disponible ASC,                     -- 2. el rollo más gastado primero
+               p.codigo ASC,                       -- 3. determinista y legible en QA
                p.id ASC
       LIMIT 1
       FOR UPDATE OF p SKIP LOCKED
@@ -367,13 +453,16 @@ export async function reservar(
   const caps0 = await capacidades(shop, reglaId);
 
   for (const item of items) {
-    const escN = escalonPara(item.anchoCm, caps0);
-    const escR = escalonPara(item.altoCm, caps0);
+    // El escalón se anuncia ANTES de intentar la reserva: es la decisión que
+    // explica todo lo que venga después, y lo primero que hay que mirar cuando
+    // alguien reporta "esta medida debería/no debería venderse".
+    const v = evaluar(item.anchoCm, item.altoCm, caps0);
     log(`reserva refId=${item.refId} regla=${reglaId} pedido=${item.anchoCm}x${item.altoCm}`);
     log(
-      `  escalones: normal(ancho ${item.anchoCm} → rollo ${escN ? escN.anchoCm : "—"}, cons=${item.altoCm})`,
-      `rotada(ancho ${item.altoCm} → rollo ${escR ? escR.anchoCm : "—"}, cons=${item.anchoCm})`,
+      `  escalón del ancho pedido ${item.anchoCm} → rollo ${v.escalonCm ?? "—"} cm`,
+      `(largo disponible ${v.largoMaxCm}) · escalera=${JSON.stringify(caps0)}`,
     );
+    log(`  veredicto: ${v.permite ? "PERMITE" : "BLOQUEA"} — ${v.motivo}`);
 
     const asignada = await reservarItem(shop, reglaId, item);
 
@@ -381,6 +470,7 @@ export async function reservar(
       const caps = await capacidades(shop, reglaId);
       log(
         `  SIN_STOCK pedido=${item.anchoCm}x${item.altoCm}`,
+        `escalón=${v.escalonCm ?? "—"} motivo="${v.motivo}"`,
         `capacidades=${JSON.stringify(caps)}`,
       );
       const anuladas = hechas.map((r) => r.refId);
