@@ -65,6 +65,8 @@ model PedidoCustom {
   productTitle String   @default("")
   tipo         String   @default("medida")
   borde        String?
+  /// Nombre de la trama elegida — snapshot, mismo tratamiento que `borde`.
+  trama        String?
   createdAt    DateTime @default(now())
 
   // --- Stock por pliego (Fase 1) ---

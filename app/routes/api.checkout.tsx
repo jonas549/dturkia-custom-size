@@ -53,6 +53,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     variantId?: number | string | null;
     productTitle?: string | null;
     borde?: string | null;
+    trama?: string | null;
     // Stock por pliego (Fase 4). El tema los enviará en las Fases 6 y 7;
     // hasta entonces el backend resuelve la trama desde variantId.
     id?: string | null;
@@ -170,6 +171,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         { name: "Alto",              value: `${item.alto} cm` },
         { name: "Impermeabilizador", value: item.waterproof ? "Sí" : "No" },
         ...(item.borde ? [{ name: "Borde", value: item.borde }] : []),
+        ...(item.trama ? [{ name: "Trama", value: item.trama }] : []),
       ],
     };
   });
@@ -269,7 +271,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     const asignada = asignacionPorIndice.get(i);
     try {
       await sql`
-        INSERT INTO "PedidoCustom" (id, shop, "orderId", ancho, alto, waterproof, "precioTotal", estado, "productTitle", borde, "pliegoId", "pliegoCodigo", rotada, "orderName", "createdAt")
+        INSERT INTO "PedidoCustom" (id, shop, "orderId", ancho, alto, waterproof, "precioTotal", estado, "productTitle", borde, trama, "pliegoId", "pliegoCodigo", rotada, "orderName", "createdAt")
         VALUES (
           ${randomUUID()},
           ${shop},
@@ -281,6 +283,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
           'pendiente',
           ${item.productTitle ?? ""},
           ${item.borde ?? null},
+          ${item.trama ?? null},
           ${asignada?.pliegoId ?? null},
           ${asignada?.pliegoCodigo ?? ""},
           ${asignada?.rotada ?? false},

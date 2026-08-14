@@ -45,6 +45,7 @@ type ItemInput = {
   waterproofPrecio?: number | null;
   productTitle?: string | null;
   borde?: string | null;
+  trama?: string | null;
   // Stock por pliego (Fase 4). El tema los enviará en las Fases 6 y 7.
   id?: string | null;
   reglaId?: string | null;
@@ -188,6 +189,11 @@ export const action = async ({ request }: ActionFunctionArgs) => {
           { key: "Ancho",             value: `${item.ancho} cm` },
           { key: "Alto",              value: `${item.alto} cm` },
           { key: "Impermeabilizador", value: item.waterproof ? "Sí" : "No" },
+          // Borde y Trama: `api.checkout.tsx` ya los manda como properties. Aquí
+          // faltaba el Borde (hueco preexistente): con el carrito mixto la orden
+          // salía sin él aunque sí se guardaba en PedidoCustom.
+          ...(item.borde ? [{ key: "Borde", value: item.borde }] : []),
+          ...(item.trama ? [{ key: "Trama", value: item.trama }] : []),
         ],
       });
     }
@@ -287,7 +293,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       const tipo    = item.tipo || "medida";
       const asignada = asignacionPorIndice.get(i);
       await sql`
-        INSERT INTO "PedidoCustom" (id, shop, "orderId", ancho, alto, waterproof, "precioTotal", estado, "productTitle", tipo, borde, "pliegoId", "pliegoCodigo", rotada, "orderName", "createdAt")
+        INSERT INTO "PedidoCustom" (id, shop, "orderId", ancho, alto, waterproof, "precioTotal", estado, "productTitle", tipo, borde, trama, "pliegoId", "pliegoCodigo", rotada, "orderName", "createdAt")
         VALUES (
           ${randomUUID()},
           ${shop},
@@ -300,6 +306,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
           ${item.productTitle ?? ""},
           ${tipo},
           ${isImp ? null : (item.borde ?? null)},
+          ${isImp ? null : (item.trama ?? null)},
           ${asignada?.pliegoId ?? null},
           ${asignada?.pliegoCodigo ?? ""},
           ${asignada?.rotada ?? false},

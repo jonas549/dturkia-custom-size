@@ -79,6 +79,16 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
            typeof b.tipo      === "string" && b.tipo.trim()
   );
 
+  // Tramas (Fase 3): mismo criterio que bordes pero con 2 campos, no 3.
+  // El admin guarda los 4 slots incluidos los vacíos; aquí se filtran los
+  // completos, que son los únicos que el widget debe pintar.
+  type TramaItem = { url: string; nombre: string };
+  const tramasRaw = Array.isArray((regla as any).tramas) ? ((regla as any).tramas as TramaItem[]) : [];
+  const tramas = tramasRaw.filter(
+    (t) => t && typeof t.url    === "string" && t.url.trim() &&
+           typeof t.nombre === "string" && t.nombre.trim()
+  );
+
   // Textos impermeabilizador (con defaults si el merchant no los configuró)
   const textosImp = configRows.length ? {
     eyebrow:     configRows[0].eyebrow,
@@ -179,6 +189,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       reglaId: regla.id,
       ...(capacidadesResp !== undefined ? { capacidades: capacidadesResp } : {}),
       bordes,
+      tramas,
       textosImp,
     }),
     { status: 200, headers: corsHeaders },

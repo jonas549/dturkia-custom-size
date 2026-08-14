@@ -758,7 +758,8 @@ $('body').on('click', '#minicart .csw-comprar', function() {
         productTitle:            item.productTitle     || null,
         precioVariante:          item.precioVariante          || null,
         precioImpermeabilizador: item.precioImpermeabilizador || null,
-        borde:                   item.borde                   || null
+        borde:                   item.borde                   || null,
+        trama:                   item.trama                   || null
       };
     });
 

@@ -96,6 +96,24 @@
       <div class="csw-total">Total: <strong id="csw-precio-total">0</strong> CLP</div>
     </div>
 
+    <!-- ── Selectores ────────────────────────────────────────────────────────
+         Trama arriba, borde abajo. En escritorio el JS los MUEVE a la columna
+         izquierda (donde hoy está la imagen grande del producto); si por lo que
+         sea no encuentra dónde moverlos, se quedan aquí y el widget sigue
+         funcionando igual que antes. Ver `reubicarSelectores()`.
+    --------------------------------------------------------------------------- -->
+
+    <!-- Tramas — renderizadas por JS cuando data.tramas tiene ítems.
+         Reutiliza las MISMAS clases csw-bordes-*/csw-b-* que los bordes: es el
+         mismo diseño a propósito, así solo hay un sitio donde tocar estilos. -->
+    <div id="csw-tramas-section" style="display:none">
+      <div class="csw-bordes-head">
+        <p class="csw-bordes-ttl">Elige la trama <small>El tejido con el que se fabrica tu alfombra.</small></p>
+        <span class="csw-bordes-sel" id="csw-trama-sel-label"></span>
+      </div>
+      <div class="csw-bordes-grid" id="csw-tramas-grid"></div>
+    </div>
+
     <!-- Bordes decorativos — renderizados por JS cuando data.bordes tiene ítems -->
     <div id="csw-bordes-section" style="display:none">
       <div class="csw-bordes-head">
@@ -105,9 +123,38 @@
       <div class="csw-bordes-grid" id="csw-bordes-grid"></div>
     </div>
 
+    <!-- Aviso de trama obligatoria. Va pegado al botón (no junto al selector,
+         que en escritorio está en la OTRA columna) para que se entienda por qué
+         el botón está deshabilitado. -->
+    <p id="csw-trama-aviso" class="csw-stock" style="display:none"></p>
+
     <button id="csw-agregar" class="csw-btn" type="button">Agregar a la bolsa</button>
     <p id="csw-error" class="csw-error" style="display:none"></p>
   </div>
+
+  {%- comment -%}
+    Carrusel de imágenes del producto. Se imprime SOLO si el producto tiene
+    imágenes: si no, no existe en el DOM y no hay nada que mostrar ni que ocultar.
+    Nace oculto y dentro de #csw-root; el JS lo saca a ancho completo debajo de
+    todo (`montarGaleria()`). Si el widget no llega a cargar, esto se queda
+    oculto aquí dentro y la galería original del tema sigue intacta.
+  {%- endcomment -%}
+  {% if product.images.size > 0 %}
+  <div id="csw-galeria" class="csw-galeria" style="display:none">
+    <div class="swiper csw-galeria__swiper">
+      <div class="swiper-wrapper">
+        {% for image in product.images %}
+          <div class="swiper-slide csw-galeria__slide">
+            <img src="{{ image | image_url: width: 900 }}"
+                 alt="{{ image.alt | escape }}" loading="lazy" />
+          </div>
+        {% endfor %}
+      </div>
+      <div class="csw-galeria__btn csw-galeria__prev" aria-label="Anterior"></div>
+      <div class="csw-galeria__btn csw-galeria__next" aria-label="Siguiente"></div>
+    </div>
+  </div>
+  {% endif %}
 </div>
 
 <style>
@@ -608,6 +655,100 @@
     text-transform: uppercase;
   }
 
+  /* ── Selectores movidos a la columna izquierda ─────────────────────────────
+     Al salir de `.csw-container` los selectores pierden su marco, así que se lo
+     devolvemos aquí: cada bloque pasa a ser una tarjeta con el mismo fondo y
+     borde que el contenedor del widget, tal como se ve en la maqueta.
+     Estas reglas SOLO aplican cuando el JS los ha movido dentro de
+     #csw-selectores; si el movimiento no ocurre, no se activan y los selectores
+     siguen viéndose como hasta ahora dentro del widget. */
+  #csw-selectores {
+    margin: 0 0 24px;
+    font-family: var(--font, 'Poppins', sans-serif);
+  }
+
+  #csw-selectores > div {
+    border: 1px solid var(--crema, #E3DECC);
+    background: var(--back, #F8F7F4);
+    padding: 20px 24px;
+    margin-bottom: 20px;
+    box-sizing: border-box;
+  }
+
+  #csw-selectores > div:last-child { margin-bottom: 0; }
+
+  /* Dentro de la tarjeta ya no hace falta el separador superior que llevaban
+     cuando iban apilados dentro del widget. */
+  #csw-selectores .csw-bordes-head { margin-top: 0; }
+
+  /* ── Carrusel de imágenes del producto ─────────────────────────────────────
+     Va a ancho completo debajo de las dos columnas. Las clases .swiper /
+     .swiper-wrapper / .swiper-slide las exige Swiper 7 (ya cargado por el
+     tema), pero el carrusel se monta FUERA de `.product`, así que las reglas
+     del tema scopeadas a `.product .swiper-*` no lo alcanzan. */
+  .csw-galeria {
+    margin: 32px 0 40px;
+    clear: both;
+    width: 100%;
+    box-sizing: border-box;
+  }
+
+  .csw-galeria__swiper {
+    position: relative;
+    overflow: hidden;
+    width: 100%;
+  }
+
+  .csw-galeria__slide {
+    background: var(--crema, #E3DECC);
+    overflow: hidden;
+    height: auto;
+  }
+
+  .csw-galeria__slide img {
+    width: 100%;
+    aspect-ratio: 1 / 1;      /* misma razón que el fix de las miniaturas:
+                                 sin esto las fotos verticales estiran el slide */
+    object-fit: cover;
+    display: block;
+  }
+
+  .csw-galeria__btn {
+    position: absolute;
+    top: 50%;
+    transform: translateY(-50%);
+    width: 38px;
+    height: 38px;
+    border-radius: 50%;
+    background: rgba(255,255,255,0.92);
+    border: 1px solid var(--crema, #E3DECC);
+    cursor: pointer;
+    z-index: 2;
+    transition: background .2s ease, opacity .2s ease;
+  }
+
+  .csw-galeria__btn:hover { background: #fff; }
+
+  /* Swiper marca los botones con esta clase cuando no hay a dónde ir */
+  .csw-galeria__btn.swiper-button-disabled { opacity: .35; cursor: default; }
+
+  .csw-galeria__btn::after {
+    content: '';
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    width: 8px;
+    height: 8px;
+    border-top: 1.5px solid var(--color, #232930);
+    border-right: 1.5px solid var(--color, #232930);
+  }
+
+  .csw-galeria__next::after { transform: translate(-65%, -50%) rotate(45deg); }
+  .csw-galeria__prev::after { transform: translate(-35%, -50%) rotate(-135deg); }
+
+  .csw-galeria__prev { left: 12px; }
+  .csw-galeria__next { right: 12px; }
+
   @media (max-width: 480px) {
     .csw-container { padding: 16px; }
 
@@ -627,10 +768,19 @@
       flex-direction: row;
     }
 
+    /* 🐛 FIX MÓVIL (2026-08-14). Antes aquí había `aspect-ratio: unset`, y esa
+       era la causa de que las miniaturas salieran estiradas hacia abajo: sin
+       proporción declarada, `.csw-b-thumb` no tiene altura propia, así que
+       `.csw-b-thumb img { height: 100% }` se resuelve como `auto` y la imagen
+       se pinta con SU proporción natural. Como las fotos de alfombra son muy
+       verticales (1:3 y más), la tarjeta crecía hasta ~540 px de alto.
+       Ahora la miniatura declara su proporción también en móvil, el alto queda
+       acotado y `object-fit: cover` recorta en vez de deformar. */
     .csw-b-thumb {
-      aspect-ratio: unset;
-      width: 90px;
+      aspect-ratio: 1 / 1;
+      width: 96px;
       flex-shrink: 0;
+      align-self: flex-start;   /* que el stretch del flex no la vuelva a estirar */
     }
 
     .csw-b-meta {
@@ -664,7 +814,7 @@
      anterior y el widget validaba con la regla vieja, permitiendo medidas
      imposibles.
   --------------------------------------------------------------------------- */
-  var CSW_VERSION = '2026-08-14-escalon-por-ancho-pedido';
+  var CSW_VERSION = '2026-08-14b-layout-tramas-carrusel';
   console.log('%c[CSW] snippet ' + CSW_VERSION,
               'background:#111;color:#7CFC00;padding:2px 8px;border-radius:3px;font-weight:bold');
 
@@ -925,6 +1075,178 @@
     section.style.display = '';
   }
 
+  /* ── Tramas ───────────────────────────────────────────────────────────────
+     Clon de `renderBordes()` con dos diferencias y ninguna más:
+       · el dato no tiene `tipo`, así que la tarjeta pinta solo el nombre (en el
+         renglón destacado, `csw-b-tipo`); se omite el renglón pequeño en vez de
+         inventarse un texto.
+       · la selección es OBLIGATORIA: mientras no haya una, `refrescarBoton()`
+         deja el botón deshabilitado.
+     Todo lo demás (clases, grid, badge, teclado, preselección) es idéntico a
+     bordes a propósito.
+  --------------------------------------------------------------------------- */
+  var tramaSeleccionada = null;
+  var tramaRequerida    = false;   /* solo si la regla trae al menos 1 trama */
+  var alCambiarTrama    = null;    /* lo engancha init() para refrescar el botón */
+
+  function renderTramas(tramas, preselect) {
+    if (!tramas || !tramas.length) return;
+
+    var section = eid('csw-tramas-section');
+    var grid    = eid('csw-tramas-grid');
+    var selLbl  = eid('csw-trama-sel-label');
+    if (!section || !grid) return;
+
+    tramaRequerida = true;
+
+    if (tramas.length === 4) {
+      grid.style.gridTemplateColumns = 'repeat(2, 1fr)';
+    }
+
+    tramas.forEach(function(trama) {
+      var card = document.createElement('div');
+      card.className = 'csw-b-card';
+      card.setAttribute('role', 'button');
+      card.setAttribute('tabindex', '0');
+      card.setAttribute('aria-label', trama.nombre);
+
+      var thumb = document.createElement('div');
+      thumb.className = 'csw-b-thumb';
+
+      var img = document.createElement('img');
+      img.src = trama.url;
+      img.alt = trama.nombre;
+      img.onerror = function() { this.style.display = 'none'; };
+
+      var badge = document.createElement('span');
+      badge.className = 'csw-b-badge';
+      badge.textContent = 'Seleccionado';
+
+      thumb.appendChild(img);
+      thumb.appendChild(badge);
+
+      var meta = document.createElement('div');
+      meta.className = 'csw-b-meta';
+
+      var elNombre = document.createElement('p');
+      elNombre.className = 'csw-b-tipo';   /* el renglón destacado */
+      elNombre.textContent = trama.nombre;
+
+      meta.appendChild(elNombre);
+      card.appendChild(thumb);
+      card.appendChild(meta);
+
+      function marcar() {
+        grid.querySelectorAll('.csw-b-card').forEach(function(c) { c.classList.remove('is-selected'); });
+        card.classList.add('is-selected');
+        tramaSeleccionada = { nombre: trama.nombre };
+        if (selLbl) selLbl.innerHTML = 'Seleccionada: <b>' + trama.nombre + '</b>';
+      }
+
+      if (preselect && preselect === trama.nombre) marcar();
+
+      function seleccionar() {
+        marcar();
+        if (alCambiarTrama) alCambiarTrama();
+      }
+
+      card.addEventListener('click', seleccionar);
+      card.addEventListener('keydown', function(e) {
+        if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); seleccionar(); }
+      });
+
+      grid.appendChild(card);
+    });
+
+    section.style.display = '';
+  }
+
+  /* ── Reubicación del layout (Fase 3) ──────────────────────────────────────
+     Los selectores nacen dentro del widget, en la columna DERECHA, porque el
+     snippet se renderiza desde `product-add.liquid`. Aquí se mueven a la
+     columna izquierda del tema y se oculta la galería grande que había ahí.
+
+     ⚠️ La galería se OCULTA, nunca se elimina: `product-add.liquid` hace
+     `document.querySelector('.mySwiper2').swiper` en tres sitios al cambiar de
+     variante, y si el nodo desapareciera reventaría el cambio de variante.
+
+     Todo va con guardas: si el tema no tiene `.left` o `.gal`, no se mueve nada
+     y el widget se queda como estaba. Nunca debe romper la página.
+  --------------------------------------------------------------------------- */
+  function reubicarSelectores() {
+    var izquierda = document.getElementById('left-temp') ||
+                    document.querySelector('.product > .left');
+    if (!izquierda) {
+      console.log('[CSW] no se encontró la columna izquierda → los selectores se quedan en el widget');
+      return false;
+    }
+
+    var secciones = [eid('csw-tramas-section'), eid('csw-bordes-section')].filter(Boolean);
+    if (!secciones.length) return false;
+
+    var cont = document.createElement('div');
+    cont.id = 'csw-selectores';
+    izquierda.insertBefore(cont, izquierda.firstChild);
+    secciones.forEach(function(s) { cont.appendChild(s); });   /* appendChild MUEVE el nodo */
+
+    /* La imagen grande + las miniaturas verticales dejan de mostrarse. */
+    var gal = izquierda.querySelector('.gal');
+    if (gal) gal.style.display = 'none';
+
+    console.log('[CSW] selectores movidos a la columna izquierda; galería original oculta');
+    return true;
+  }
+
+  /* Saca el carrusel a ancho completo, justo DEBAJO de las dos columnas.
+     Se inserta como hermano de `.product` para que las reglas del tema
+     scopeadas a `.product ...` no lo toquen. */
+  function montarGaleria() {
+    var gal = eid('csw-galeria');
+    if (!gal) {          /* el producto no tiene imágenes → no se pinta nada */
+      console.log('[CSW] el producto no tiene imágenes → sin carrusel');
+      return;
+    }
+
+    var prod = document.querySelector('.product');
+    if (prod && prod.parentNode) {
+      prod.parentNode.insertBefore(gal, prod.nextSibling);
+    }
+    gal.style.display = '';
+
+    var slides = gal.querySelectorAll('.swiper-slide').length;
+
+    /* Swiper 7 lo carga el tema con `defer`, así que puede no estar listo
+       todavía. Se reintenta un rato y, si nunca llega, el carrusel se queda
+       como una fila de imágenes con scroll horizontal (degradado digno). */
+    var intentos = 0;
+    (function initSwiper() {
+      if (typeof Swiper === 'undefined') {
+        if (++intentos > 40) {
+          gal.querySelector('.swiper-wrapper').style.cssText =
+            'display:flex;gap:10px;overflow-x:auto;';
+          console.log('[CSW] Swiper no llegó a cargar → carrusel degradado a scroll horizontal');
+          return;
+        }
+        return setTimeout(initSwiper, 100);
+      }
+      new Swiper(gal.querySelector('.csw-galeria__swiper'), {
+        spaceBetween: 10,
+        slidesPerView: 1.15,
+        /* Sin loop cuando hay pocas fotos: con loop y 1 sola imagen Swiper
+           duplica slides y se ve raro (ya pasó con el slideshow del tema). */
+        loop: false,
+        watchOverflow: true,
+        navigation: { nextEl: '.csw-galeria__next', prevEl: '.csw-galeria__prev' },
+        breakpoints: {
+          640:  { slidesPerView: 2.2, spaceBetween: 12 },
+          830:  { slidesPerView: 3,   spaceBetween: 14 },
+          1200: { slidesPerView: 4,   spaceBetween: 16 }
+        }
+      });
+      console.log('[CSW] carrusel montado con ' + slides + ' imagen(es)');
+    })();
+  }
+
   function init() {
     var root = document.getElementById('csw-root');
     if (!root) return;
@@ -942,6 +1264,7 @@
 
     /* Recuperar borde del item siendo editado */
     var editBorde = '';
+    var editTrama = '';
     if (enModoEdicion) {
       try {
         var rawEx = localStorage.getItem('csw_pending_orders');
@@ -949,6 +1272,7 @@
           var exArr = JSON.parse(rawEx);
           var exItem = exArr.find(function(i) { return i.id === editId; });
           if (exItem && exItem.borde) editBorde = exItem.borde;
+          if (exItem && exItem.trama) editTrama = exItem.trama;
         }
       } catch (e) {}
     }
@@ -1099,27 +1423,67 @@
           return cabe;
         }
 
-        revisarDisponibilidad();
+        /* Trama obligatoria (Fase 3).
+           `tramaRequerida` solo se pone a true si la regla trae al menos una
+           trama válida: una regla sin tramas NO puede quedar bloqueada, igual
+           que en pliegos una trama sin rollos nunca bloquea la venta. */
+        function faltaElegirTrama() {
+          return tramaRequerida && !tramaSeleccionada;
+        }
+
+        /* EL ÚNICO sitio que decide si el botón se habilita.
+           El stock manda primero y con su propio mensaje: si la medida no es
+           vendible, se sale de aquí sin tocar nada más, así la lógica de
+           pliegos queda exactamente como estaba. La trama solo puede bloquear
+           ADICIONALMENTE, nunca desbloquear. */
+        function refrescarBoton() {
+          var okStock = revisarDisponibilidad();
+          var btn = eid('csw-agregar');
+          if (!okStock) {
+            mostrarTramaAviso(false);
+            return false;
+          }
+          var falta = faltaElegirTrama();
+          if (btn) btn.disabled = falta;
+          mostrarTramaAviso(falta);
+          return !falta;
+        }
+
+        function mostrarTramaAviso(visible) {
+          var el = eid('csw-trama-aviso');
+          if (!el) return;
+          el.textContent = visible ? 'Elige una trama para continuar.' : '';
+          el.style.display = visible ? '' : 'none';
+        }
+
+        /* Al elegir una trama hay que re-evaluar el botón. */
+        alCambiarTrama = refrescarBoton;
+
+        renderTramas(data.tramas || [], editTrama);
+        renderBordes(data.bordes || [], editBorde);
+
+        refrescarBoton();
 
         /* Red de seguridad: si algo del tema vuelve a habilitar el botón por su
-           cuenta, se re-deshabilita. Solo actúa cuando la medida NO es vendible,
+           cuenta, se re-deshabilita. Solo actúa cuando la compra NO es válida,
            así que nunca pelea con el flujo normal. */
-        if (controlDeStock && window.MutationObserver) {
+        if ((controlDeStock || tramaRequerida) && window.MutationObserver) {
           var btnRef = eid('csw-agregar');
           if (btnRef) {
             new MutationObserver(function () {
               if (btnRef.disabled) return;
               var a = parseInt(sAncho.value, 10);
               var l = parseInt(sAlto.value,  10);
-              if (tramaAgotada || !cabeEnCapacidades(a, l, capacidades)) {
-                console.log('[CSW] el botón fue re-habilitado por fuera → se deshabilita de nuevo');
+              var malStock = controlDeStock &&
+                             (tramaAgotada || !cabeEnCapacidades(a, l, capacidades));
+              if (malStock || faltaElegirTrama()) {
+                console.log('[CSW] el botón fue re-habilitado por fuera → se deshabilita de nuevo',
+                            malStock ? '(stock)' : '(falta trama)');
                 btnRef.disabled = true;
               }
             }).observe(btnRef, { attributes: true, attributeFilter: ['disabled'] });
           }
         }
-
-        renderBordes(data.bordes || [], editBorde);
 
         document.documentElement.classList.add('csw-natives-hidden');
         if (loadingEl)   loadingEl.style.display   = 'none';
@@ -1131,6 +1495,13 @@
           if (containerEl) containerEl.classList.add('csw-modo-edicion');
         }
 
+        /* Layout nuevo (Fase 3): selectores a la columna izquierda y carrusel a
+           ancho completo abajo. Va DESPUÉS de mostrar el widget: si se moviera
+           antes, los selectores saldrían de #csw-root (que aún está oculto) y se
+           verían un instante sueltos, antes que el resto. */
+        reubicarSelectores();
+        montarGaleria();
+
         /* Un solo manejador para los dos sliders, enganchado por TODAS las vías.
            El tema (Merlí, OS 1.0) mueve controles con jQuery y propaga cambios
            con .trigger('change'), que NO despierta un addEventListener nativo.
@@ -1141,7 +1512,7 @@
           eid('csw-ancho-val').textContent = sAncho.value;
           eid('csw-alto-val').textContent  = sAlto.value;
           calcular(precioPorM2, waterproofPorM2, waterproofActivo);
-          revisarDisponibilidad();
+          refrescarBoton();
         }
 
         sAncho.addEventListener('input',  sincronizarMedidas);
@@ -1168,7 +1539,7 @@
           /* Stock por pliego (Fase 6): red de seguridad. El botón ya está
              deshabilitado en este caso, pero si algo lo reactivara no debe
              colarse una medida imposible. */
-          if (!revisarDisponibilidad()) return;
+          if (!refrescarBoton()) return;
 
           var anchoN     = parseInt(sAncho.value, 10);
           var altoN      = parseInt(sAlto.value,  10);
@@ -1181,6 +1552,8 @@
           var bordeStr       = bordeSeleccionado
             ? (bordeSeleccionado.nombre + ' - ' + bordeSeleccionado.tipo)
             : null;
+          /* La trama solo tiene nombre, así que el snapshot es el nombre pelado. */
+          var tramaStr       = tramaSeleccionada ? tramaSeleccionada.nombre : null;
 
           try {
             var arr = [];
@@ -1214,6 +1587,7 @@
                   precio:           precioAlfombra,
                   waterproofPrecio: precioWp,
                   borde:            bordeStr !== null ? bordeStr : (existing.borde || null),
+                  trama:            tramaStr !== null ? tramaStr : (existing.trama || null),
                   variantId:        existing.variantId       || root.dataset.variantId    || '',
                   imageUrl:         existing.imageUrl        || root.dataset.imageUrl     || '',
                   productTitle:     existing.productTitle    || (document.querySelector('.product h1') || {}).textContent || '',
@@ -1225,7 +1599,7 @@
                 arr.push({
                   id: editId, shop: shop, reglaId: reglaId, ancho: anchoN, alto: altoN,
                   waterproof: !!wpChecked, precio: precioAlfombra, waterproofPrecio: precioWp,
-                  borde: bordeStr,
+                  borde: bordeStr, trama: tramaStr,
                   variantId: root.dataset.variantId || '', imageUrl: root.dataset.imageUrl || '',
                   productTitle: (document.querySelector('.product h1') || {}).textContent || '',
                   productHandle: root.dataset.productHandle || '', createdAt: Date.now()
@@ -1236,7 +1610,7 @@
               arr.push({
                 id: itemId, shop: shop, reglaId: reglaId, ancho: anchoN, alto: altoN,
                 waterproof: !!wpChecked, precio: precioAlfombra, waterproofPrecio: precioWp,
-                borde: bordeStr,
+                borde: bordeStr, trama: tramaStr,
                 variantId: root.dataset.variantId || '', imageUrl: root.dataset.imageUrl || '',
                 productTitle: (document.querySelector('.product h1') || {}).textContent || '',
                 productHandle: root.dataset.productHandle || '', createdAt: Date.now()
