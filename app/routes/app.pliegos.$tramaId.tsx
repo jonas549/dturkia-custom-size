@@ -11,7 +11,7 @@
  * ruta pasó de `$reglaId` a `$tramaId` y todas las consultas filtran por trama.
  */
 
-import { Fragment, useState } from "react";
+import { Fragment, useEffect, useState } from "react";
 import type { ActionFunctionArgs, HeadersFunction, LoaderFunctionArgs } from "react-router";
 import { Form, Link, useActionData, useLoaderData, useNavigation, useSearchParams } from "react-router";
 import { boundary } from "@shopify/shopify-app-react-router/server";
@@ -189,6 +189,17 @@ const chip = (bg: string, fg: string): React.CSSProperties => ({
 });
 
 const m = (cm: number) => `${(cm / 100).toFixed(2)} m`;
+
+/**
+ * ¿No hay nada que restaurar? Ojo con la asimetría, que es la que confundía:
+ * la barra de consumo se pinta con `disponibleCm` (descuenta las reservas
+ * vigentes), pero restaurar solo puede mover `largoRestanteCm`, que las
+ * reservas NO tocan. Así que un rollo puede verse "consumido" en la barra y
+ * estar lleno de verdad. Por eso el panel explica los dos números.
+ */
+const yaLleno = (p: { largoRestanteCm: number; largoTotalCm: number }) =>
+  p.largoRestanteCm >= p.largoTotalCm;
+
 const fecha = (iso: string) =>
   new Date(iso).toLocaleString("es-CL", { day: "2-digit", month: "2-digit", year: "2-digit", hour: "2-digit", minute: "2-digit" });
 
@@ -204,6 +215,16 @@ export default function GestionTrama() {
   const [ajustando, setAjustando] = useState<string | null>(null);
   const [dandoBaja, setDandoBaja] = useState<string | null>(null);
   const [restaurando, setRestaurando] = useState<string | null>(null);
+
+  /* Al pasar de una trama a otra, React Router REUTILIZA este componente (misma
+     ruta, solo cambia el parámetro), así que el `useState` NO se reinicia y las
+     tres filas desplegadas se quedan abiertas apuntando a pliegos de la trama
+     anterior. Se limpian explícitamente. */
+  useEffect(() => {
+    setAjustando(null);
+    setDandoBaja(null);
+    setRestaurando(null);
+  }, [trama.id]);
 
   const activos = pliegos.filter((p) => p.activo);
   const disponibleTotal = activos.reduce((a, p) => a + Math.max(0, p.disponibleCm), 0);
@@ -368,12 +389,18 @@ export default function GestionTrama() {
                                   onClick={() => { setAjustando(ajustando === p.id ? null : p.id); setDandoBaja(null); setRestaurando(null); }}>
                                   Ajustar
                                 </button>{" "}
+                                {/* NUNCA `disabled`: un botón muerto que no dice
+                                    por qué se lee como "se trabó". Siempre abre
+                                    el panel, y el panel explica. */}
                                 <button type="button"
-                                  style={{ ...btnGhost, color: "#0b5c2e", borderColor: "#0b5c2e" }}
-                                  disabled={p.largoRestanteCm >= p.largoTotalCm}
-                                  title={p.largoRestanteCm >= p.largoTotalCm ? "Ya está al 100%" : "Devolver el rollo a 0% consumido"}
+                                  style={{
+                                    ...btnGhost,
+                                    color: yaLleno(p) ? "#6d7175" : "#0b5c2e",
+                                    borderColor: yaLleno(p) ? "#c9cccf" : "#0b5c2e",
+                                  }}
+                                  title={yaLleno(p) ? "Este rollo ya está al 100%" : "Devolver el rollo a 0% consumido"}
                                   onClick={() => { setRestaurando(restaurando === p.id ? null : p.id); setAjustando(null); setDandoBaja(null); }}>
-                                  Restaurar
+                                  {yaLleno(p) ? "Restaurar ✓" : "Restaurar"}
                                 </button>{" "}
                                 <button type="button" style={p.activo ? btnDanger : btnGhost}
                                   onClick={() => { setDandoBaja(dandoBaja === p.id ? null : p.id); setAjustando(null); setRestaurando(null); }}>
@@ -418,36 +445,60 @@ export default function GestionTrama() {
                             {restaurando === p.id && (
                               <tr>
                                 <td style={{ ...td, background: "#f4fbf6" }} colSpan={8}>
-                                  <Form method="post" onSubmit={() => setRestaurando(null)}>
-                                    <input type="hidden" name="intent" value="restaurar" />
-                                    <input type="hidden" name="pliegoId" value={p.id} />
-                                    <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 8 }}>
-                                      Restaurar {p.codigo} al 100%
-                                    </div>
-                                    <p style={{ fontSize: 12, color: "#6d7175", margin: "0 0 10px" }}>
-                                      Devuelve el rollo a <strong>0% consumido</strong>:{" "}
-                                      {m(p.largoRestanteCm)} → <strong>{m(p.largoTotalCm)}</strong>{" "}
-                                      (se recuperan {m(p.largoTotalCm - p.largoRestanteCm)}). Es para
-                                      resetear el stock después de una tanda de pruebas.
-                                      {p.reservasVigentes > 0 && (
-                                        <>
-                                          {" "}<strong style={{ color: "#7a4f01" }}>
-                                            Ojo: este rollo tiene {p.reservasVigentes} reserva(s) vigente(s)
-                                          </strong>, que seguirán ocupando su largo hasta que venzan
-                                          ({ttl} min). Restaurar no anula reservas.
-                                        </>
-                                      )}
-                                    </p>
-                                    <div style={{ display: "grid", gridTemplateColumns: "1fr auto", gap: 10, alignItems: "end" }}>
-                                      <div>
-                                        <label style={label}>Motivo (obligatorio)</label>
-                                        <input name="nota" placeholder="Ej: reset de stock tras QA" style={input} required />
+                                  {yaLleno(p) ? (
+                                    /* Nada que restaurar. Antes esto era un botón
+                                       `disabled` y silencioso, y se leía como que
+                                       el botón se había roto. */
+                                    <div>
+                                      <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 8 }}>
+                                        {p.codigo} ya está al 100%
                                       </div>
-                                      <button type="submit" style={btn} disabled={guardando}>
-                                        Confirmar restauración
-                                      </button>
+                                      <p style={{ fontSize: 12, color: "#6d7175", margin: 0 }}>
+                                        Su largo restante ya es el total ({m(p.largoTotalCm)}), así que
+                                        no hay nada que devolver.
+                                        {p.reservasVigentes > 0 && (
+                                          <>
+                                            {" "}Tiene <strong>{p.reservasVigentes} reserva(s) vigente(s)</strong>{" "}
+                                            que ocupan {m(p.largoRestanteCm - p.disponibleCm)} — por eso la barra
+                                            marca consumo aunque el rollo esté lleno. Una reserva{" "}
+                                            <strong>no baja el largo restante</strong>: deja de ocupar sola a
+                                            los {ttl} min, o al confirmarse la compra. Restaurar no las anula.
+                                          </>
+                                        )}
+                                      </p>
                                     </div>
-                                  </Form>
+                                  ) : (
+                                    <Form method="post" onSubmit={() => setRestaurando(null)}>
+                                      <input type="hidden" name="intent" value="restaurar" />
+                                      <input type="hidden" name="pliegoId" value={p.id} />
+                                      <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 8 }}>
+                                        Restaurar {p.codigo} al 100%
+                                      </div>
+                                      <p style={{ fontSize: 12, color: "#6d7175", margin: "0 0 10px" }}>
+                                        Devuelve el rollo a <strong>0% consumido</strong>:{" "}
+                                        {m(p.largoRestanteCm)} → <strong>{m(p.largoTotalCm)}</strong>{" "}
+                                        (se recuperan {m(p.largoTotalCm - p.largoRestanteCm)}). Es para
+                                        resetear el stock después de una tanda de pruebas.
+                                        {p.reservasVigentes > 0 && (
+                                          <>
+                                            {" "}<strong style={{ color: "#7a4f01" }}>
+                                              Ojo: este rollo tiene {p.reservasVigentes} reserva(s) vigente(s)
+                                            </strong>, que seguirán ocupando su largo hasta que venzan
+                                            ({ttl} min). Restaurar no anula reservas.
+                                          </>
+                                        )}
+                                      </p>
+                                      <div style={{ display: "grid", gridTemplateColumns: "1fr auto", gap: 10, alignItems: "end" }}>
+                                        <div>
+                                          <label style={label}>Motivo (obligatorio)</label>
+                                          <input name="nota" placeholder="Ej: reset de stock tras QA" style={input} required />
+                                        </div>
+                                        <button type="submit" style={btn} disabled={guardando}>
+                                          Confirmar restauración
+                                        </button>
+                                      </div>
+                                    </Form>
+                                  )}
                                 </td>
                               </tr>
                             )}

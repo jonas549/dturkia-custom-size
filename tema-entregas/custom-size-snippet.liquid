@@ -815,7 +815,7 @@
      anterior y el widget validaba con la regla vieja, permitiendo medidas
      imposibles.
   --------------------------------------------------------------------------- */
-  var CSW_VERSION = '2026-08-14c-stock-y-precio-por-trama';
+  var CSW_VERSION = '2026-08-14d-sin-impermeabilizador';
   console.log('%c[CSW] snippet ' + CSW_VERSION,
               'background:#111;color:#7CFC00;padding:2px 8px;border-radius:3px;font-weight:bold');
 
@@ -1348,7 +1348,29 @@
 
         var regla            = data.regla;
         var waterproofPorM2  = data.waterproofPorM2 || 0;
-        var waterproofActivo = !!data.waterproofActivo;
+
+        /* ── Impermeabilizador: OCULTO en el producto de medida personalizada ──
+           Este producto no lleva impermeabilizador. Se apaga aquí, en la ÚNICA
+           variable de la que ya colgaba todo, en vez de tocar `calcular()`:
+             · `#csw-waterproof-section` nace con display:none y solo se muestra
+               dentro de `if (waterproofActivo)` → se queda oculto.
+             · `wpChecked` pasa a ser siempre false → el total es solo la
+               alfombra, sin sumar nada.
+             · la preselección de `editWp` y el listener del checkbox también
+               están dentro de ese `if` → no pueden re-activarlo por detrás.
+
+           ⚠️ Esto SOLO afecta a esta plantilla: el snippet únicamente se monta
+           en productos con el tag `medida-personalizada`. El impermeabilizador
+           de los productos normales vive en `extensions/custom-size-widget/`
+           (`#csw-imp-root`) y NO se ha tocado. Las fórmulas tampoco: `calcular()`
+           sigue idéntica, solo recibe `false` en este parámetro.
+
+           Para volver a activarlo aquí: poner CSW_IMPERMEABILIZADOR = true. */
+        var CSW_IMPERMEABILIZADOR = false;
+        var waterproofActivo = CSW_IMPERMEABILIZADOR && !!data.waterproofActivo;
+        if (!CSW_IMPERMEABILIZADOR) {
+          console.log('[CSW] impermeabilizador OCULTO en esta plantilla (producto de medida personalizada)');
+        }
 
         /* 🔷 §4.4 — TODO lo que depende de la trama vive en estas variables, y
            las tres se rellenan al elegir trama (o quedan neutras si la regla no
