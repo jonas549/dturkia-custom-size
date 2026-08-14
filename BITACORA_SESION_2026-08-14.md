@@ -1,8 +1,12 @@
-# Bitácora de sesión — 2026-08-14
+# Bitácora de sesión — viernes 14/08/2026
 
 **Proyecto:** dturkia-custom-size
-**Documento maestro del módulo de pliegos:** `BITACORA_STOCK_PLIEGOS_2026-08-12.md` (fuente de verdad).
-Este archivo es solo el registro del día.
+**Documento maestro del módulo de pliegos:** `BITACORA_STOCK_PLIEGOS_2026-08-12.md` (fuente de verdad
+de ese módulo; lo de aquí que sea de pliegos está también allí).
+Este archivo es el registro completo del día: las tres cosas que se hicieron, cómo probarlas y qué
+queda pendiente.
+
+**Commits del día:** `eadaf49` · `45ed244` · `f2b074a` — todos en `main` y desplegados en Vercel.
 
 ---
 
@@ -245,12 +249,72 @@ recorta en vez de deformar. Aplica igual a bordes y a tramas, porque comparten c
 
 ---
 
-## 4. Estado al cerrar
+## 4. Qué hay que pegar en el tema, y cómo probarlo
+
+### 4.1 Los 2 archivos a copiar/pegar
+
+El tema **no está en git**. La fuente de verdad es el editor de temas de Shopify; en el repo hay una
+copia versionada para diffear y reconstruir.
+
+| Pegar en Shopify | Copiar desde |
+|---|---|
+| `snippets/custom-size-snippet.liquid` | `dturkia-custom-size\tema-entregas\custom-size-snippet.liquid` |
+| `assets/functions.js` | `dturkia-custom-size\tema-entregas\functions.js` |
+
+**Comprobación obligatoria del paste:** en la consola de la página de producto tiene que salir
+
+```
+[CSW] snippet 2026-08-14b-layout-tramas-carrusel
+```
+
+Si sale una versión anterior, el paste **no llegó al tema publicado** — ya pasó el 2026-08-13 y se
+perdió una tarde buscando el bug en el backend, que estaba bien.
+
+`sections/product-section.liquid` y `snippets/product-add.liquid` **no se tocan**.
+
+### 4.2 Plan de pruebas
+
+| # | Qué se prueba | Cómo | Qué tiene que pasar |
+|---|---|---|---|
+| 1 | **Layout reubicado** | Abrir un producto con tag `medida-personalizada` | La imagen grande y las miniaturas verticales desaparecen de la izquierda; ahí quedan trama arriba y borde abajo, cada uno en su tarjeta. Consola: `[CSW] selectores movidos a la columna izquierda` |
+| 2 | **No se rompió el tema** | Cambiar de talla/variante en ese producto | El cambio de variante sigue funcionando (la galería se ocultó, no se borró, justo por esto) |
+| 3 | **Tramas del admin** | Cargar 2-3 tramas en la regla y recargar la tienda | Aparecen con el mismo diseño que los bordes |
+| 4 | **Trama obligatoria** | Entrar sin elegir trama | Botón deshabilitado + aviso "Elige una trama para continuar". Al pinchar una, se habilita |
+| 5 | **Slot incompleto** | Dejar en el admin una trama con URL pero sin nombre | No aparece en la tienda |
+| 6 | **Trama en el pedido** | Comprar y mirar la orden | Sale `Trama: Ceniza` junto a `Borde: …` |
+| 7 | **Carrusel con fotos** | Producto con imágenes | Fila a ancho completo debajo de las dos columnas, con flechas. Consola: `[CSW] carrusel montado con N imagen(es)` |
+| 8 | **Carrusel sin fotos** | Producto sin imágenes | No aparece nada. Consola: `el producto no tiene imágenes → sin carrusel` |
+| 9 | **Fix móvil** | Abrir el selector de bordes en el teléfono | Miniaturas cuadradas de 96 px, no las tiras de ~540 px de alto de la captura `error movil.jpg`. Igual en tramas |
+| 10 | **Stock sigue vivo** | Poner ancho 228 y alto 320 | Botón bloqueado por stock con su propio mensaje, no por la trama |
+
+### 4.3 Las dos imágenes de referencia
+
+Estaban en `C:\Users\Jonas\Desktop\appdturkia\` como **`Diseño nuevo.jpeg`** y **`error movil.jpg`**
+(con espacios), **no** en `dturkia-custom-size/referencia_fase3/` como decía el encargo. Si se
+retoma el rediseño, buscarlas ahí.
+
+---
+
+## 5. Estado al cerrar
 
 | | |
 |---|---|
-| **Commits** | `eadaf49` (escalón) · `45ed244` (admin de tramas) · el de la Fase 3 |
+| **Commits** | `eadaf49` (escalón) · `45ed244` (admin de tramas) · `f2b074a` (Fase 3) |
 | **Base de datos** | Migraciones `20260814000000_tramas` y `20260814100000_pedido_trama` aplicadas. `Alfombra test 2` ya tiene cargada la trama "Ceniza" |
 | **Pendiente de Jonas** | (a) Pegar **2 archivos** en el tema: `snippets/custom-size-snippet.liquid` y `assets/functions.js`, versión `2026-08-14b-layout-tramas-carrusel` · (b) crear `PLIEGOS_MODO=log` en Vercel |
 | **Siguiente en tramas** | Ya conectadas al frontend. Queda cargar las tramas reales de cada regla desde el admin |
-| **Sin commitear** | 2 cambios previos en `extensions/` ajenos a esto (texto "impermeabilización" y CSS de `#csw-imp-root p`) |
+| **Sin commitear** | 2 cambios previos en `extensions/` ajenos a esto (texto "impermeabilización" y CSS de `#csw-imp-root p`), de sesiones anteriores. Siguen en el working tree |
+| **Decisión a validar** | En `api.checkout-impermeabilizador.tsx` se añadió el `Borde` que faltaba en `customAttributes` (hueco preexistente: con carrito mixto la orden salía sin él). No se pidió; Jonas puede vetarlo |
+
+### Riesgos abiertos
+
+1. **Ventana de inconsistencia del tema.** Mientras no se peguen los 2 archivos, la tienda sirve el
+   snippet viejo: sin selector de tramas, sin el layout nuevo y **validando el stock con la regla de
+   escalones anterior**. Es inocuo mientras `PLIEGOS_MODO` no exista en Vercel (= `off`), pero **hay
+   que pegar antes de poner `log` o `bloqueo`**.
+2. **`functions.js` sigue sin estar en git** por el lado del tema. La copia de `tema-entregas/` no es
+   la fuente de verdad, solo permite diffear. Ante cualquier bug de carrito, revisar los dos lados
+   (productor y consumidor) antes que el backend.
+3. La trama obligatoria depende de que la regla tenga tramas cargadas. Una regla **sin** tramas no
+   bloquea nada (a propósito), así que si el cliente espera que sea obligatoria en todas, hay que
+   cargarlas regla por regla desde el admin.
