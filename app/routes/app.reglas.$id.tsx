@@ -106,6 +106,15 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
     if (Array.isArray(parsed)) bordes = parsed;
   } catch { bordes = []; }
 
+  // Tramas: mismo patrón que bordes, pero con 2 campos en vez de 3.
+  // Se guardan los 4 slots tal cual, incluidos los incompletos, para que el
+  // merchant no pierda lo que llevaba escrito a medias al guardar.
+  let tramas: { url: string; nombre: string }[] = [];
+  try {
+    const parsed = JSON.parse(String(fd.get("tramas") ?? "[]"));
+    if (Array.isArray(parsed)) tramas = parsed;
+  } catch { tramas = []; }
+
   const oldRegla = await prisma.reglaPersonalizada.findFirst({
     where: { id: params.id, shop: session.shop },
     select: { productIds: true },
@@ -126,6 +135,7 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
       activa: fd.get("activa") === "on",
       productIds,
       bordes,
+      tramas,
     },
   });
 
@@ -279,6 +289,10 @@ type Producto = { id: string; title: string };
 type BordeItem = { imagenUrl: string; nombre: string; tipo: string };
 const emptyBorde = (): BordeItem => ({ imagenUrl: "", nombre: "", tipo: "" });
 
+/** Trama: como un borde pero SIN `tipo`. Solo imagen + nombre. */
+type TramaItem = { url: string; nombre: string };
+const emptyTrama = (): TramaItem => ({ url: "", nombre: "" });
+
 export default function EditarRegla() {
   const { regla, productosExistentes } = useLoaderData<typeof loader>();
   const actionData = useActionData<typeof action>();
@@ -310,6 +324,28 @@ export default function EditarRegla() {
 
   const actualizarBorde = (idx: number, field: keyof BordeItem, value: string) => {
     setBordes((prev) => prev.map((b, i) => (i === idx ? { ...b, [field]: value } : b)));
+  };
+
+  // Tramas — mismo esquema de 4 slots fijos que bordes: se rellena lo que venga
+  // de la regla y se completa hasta 4 con slots vacíos, para que el form siempre
+  // muestre los 4 huecos aunque en la base haya menos.
+  const [tramas, setTramas] = useState<TramaItem[]>(() => {
+    try {
+      const raw = (regla as any).tramas;
+      if (Array.isArray(raw)) {
+        const slots = raw.map((t: any) => ({
+          url:    String(t?.url    || ""),
+          nombre: String(t?.nombre || ""),
+        }));
+        while (slots.length < 4) slots.push(emptyTrama());
+        return slots.slice(0, 4);
+      }
+    } catch {}
+    return [emptyTrama(), emptyTrama(), emptyTrama(), emptyTrama()];
+  });
+
+  const actualizarTrama = (idx: number, field: keyof TramaItem, value: string) => {
+    setTramas((prev) => prev.map((t, i) => (i === idx ? { ...t, [field]: value } : t)));
   };
 
   const abrirPicker = async () => {
@@ -612,6 +648,70 @@ export default function EditarRegla() {
               );
             })}
             <input type="hidden" name="bordes" value={JSON.stringify(bordes)} />
+          </div>
+
+          {/* Tramas — mismo patrón que Bordes, pero solo URL + Nombre.
+              Por ahora es solo carga: el widget de la tienda todavía no las
+              consume; se conectarán al frontend en el rediseño. */}
+          <div style={{ marginTop: 28, borderTop: "1px solid #e4e5e7", paddingTop: 20 }}>
+            <span style={{ ...labelStyle, fontSize: 14, marginBottom: 4 }}>Tramas</span>
+            <p style={{ fontSize: 13, color: "#6d7175", margin: "0 0 16px" }}>
+              Hasta 4 tramas. Sube la imagen en Shopify Admin → Settings → Files, copia la URL CDN
+              y pégala aquí. Un slot con los 2 campos completos se guarda como válido; si alguno
+              está vacío, se ignora. <strong>Todavía no se muestran en la tienda</strong> — se
+              conectarán al configurador en el rediseño de la página de personalización.
+            </p>
+            {tramas.map((trama, i) => {
+              const completo = !!(trama.url && trama.nombre);
+              return (
+                <div
+                  key={i}
+                  style={{
+                    border: `1px solid ${completo ? "#b0e0c0" : "#e4e5e7"}`,
+                    borderRadius: 6,
+                    padding: "14px 16px",
+                    marginBottom: 12,
+                    background: completo ? "#f0fdf4" : "#fafafa",
+                  }}
+                >
+                  <div style={{ fontSize: 12, fontWeight: 600, color: "#6d7175", marginBottom: 10, textTransform: "uppercase", letterSpacing: 0.5 }}>
+                    Trama {i + 1}{trama.nombre ? ` — ${trama.nombre}` : ""}
+                    {completo && <span style={{ marginLeft: 8, color: "#008060" }}>✓ Completo</span>}
+                  </div>
+                  <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr", gap: 10, marginBottom: trama.url ? 10 : 0 }}>
+                    <div>
+                      <label style={labelStyle}>URL de la imagen</label>
+                      <input
+                        type="url"
+                        value={trama.url}
+                        onChange={(e) => actualizarTrama(i, "url", e.target.value)}
+                        style={inputStyle}
+                        placeholder="https://cdn.shopify.com/..."
+                      />
+                    </div>
+                    <div>
+                      <label style={labelStyle}>Nombre</label>
+                      <input
+                        type="text"
+                        value={trama.nombre}
+                        onChange={(e) => actualizarTrama(i, "nombre", e.target.value)}
+                        style={inputStyle}
+                        placeholder="Ceniza"
+                      />
+                    </div>
+                  </div>
+                  {trama.url && (
+                    <img
+                      src={trama.url}
+                      alt={`Preview trama ${i + 1}`}
+                      style={{ width: 90, height: 68, objectFit: "cover", borderRadius: 4, border: "1px solid #e4e5e7", display: "block" }}
+                      onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }}
+                    />
+                  )}
+                </div>
+              );
+            })}
+            <input type="hidden" name="tramas" value={JSON.stringify(tramas)} />
           </div>
 
           {/* Botones */}

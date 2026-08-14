@@ -45,6 +45,10 @@ model ReglaPersonalizada {
   activa           Boolean  @default(true)
   productIds       String[] @default([])
   bordes           Json     @default("[]")
+  /// Hasta 4 slots {url, nombre}. Mismo patrón que `bordes`, pero sin `tipo`.
+  /// Se guardan los 4 slots tal cual (incluidos los vacíos); el filtrado de
+  /// "slot completo" se hace al leer, como con bordes en /api/precio.
+  tramas           Json     @default("[]")
   createdAt        DateTime @default(now())
   pliegos          Pliego[]
 }
